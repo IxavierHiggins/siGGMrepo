@@ -11,7 +11,7 @@ In R/RStudio, run the following code to download and install the package from th
 ```
 install.packages("devtools")
 library("devtools")
-devtools::install_github("IxavierHiggins/siGGM",subdir = "siGGM")
+devtools::install_github("IxavierHiggins/siGGM_repo")
 library(siGGM)
 ```
 
