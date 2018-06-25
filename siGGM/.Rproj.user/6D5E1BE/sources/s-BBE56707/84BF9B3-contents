@@ -1,0 +1,97 @@
+##########
+# Generate Misspecified data for simulation examination
+#   SmallWorld (meth==1), ScaleFree(meth==2), Erdos Renyi (meth==3), and Modular Struct. (meth==4)
+#
+#
+#
+###########
+
+
+
+p=100
+T=200; #number of timepoints
+N=20; #number of subjects
+SCvals=matrix(0,3,2); SCvals[1,]=c(.2,.1);SCvals[2,]=c(.25,.25);SCvals[3,]=c(.35,.35)
+Mn=c(.02,.05,.1,.2,.25)
+
+library(psych)
+library(space)
+library(QUIC)
+library(glasso)
+library(R.matlab)
+library(flux)
+library(BDgraph,lib.loc = "/Library/Frameworks/R.framework/Versions/3.2/Resources/library/")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/MixedSC_Overpower_new.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/noisyOmega.R")
+source(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Code and scripts/functions/prec2parcorr.R"))
+
+
+for(err in 1:length(Mn)){
+for(meth in 1:3){
+  SMdat=array(0,c(T,p,20))
+  MI=array(0,c(p,p,20))
+  MII=array(0,c(p,p,20))
+  MIII=array(0,c(p,p,20))
+  Strong=array(0,c(p,p,20))
+  PrecisionTruth=array(0,c(p,p,20))
+  if(meth==1){
+    pathdat="/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/new_settings_fromJoshLukemire/Simulation Data/SmallWorld"; 
+    datobj<-readMat(paste0(pathdat,"/20Omegas_",p,"p.mat")); Structure="SmallWorld"
+  }else if(meth==2){
+    pathdat="/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Code and scripts/data/ScaleFree";
+    datobj<-readMat(paste0(pathdat,"/",p,"p_simdat_1.mat"));Structure="ScaleFree" #SCALE FREE
+  }else if(meth==4){
+    source(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Code and scripts/functions/graphgen",p,".R"))
+    Structure="BD"
+  }else if(meth==3){
+    pathdat="/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Code and scripts/data/ErdosRenyi/";
+    datobj<-readMat(paste0(pathdat,"PrecisionMatrices_p=",p,".mat"));
+    Structure="ErdosRenyi"
+  }
+  for(i in 1:N){
+    if(meth==4){
+      source(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Code and scripts/functions/graphgen",p,".R"))
+      if(p==100){
+        GRAPH<-graphgen100(p,prop = .55)
+      }else{
+        GRAPH<-graphgen200(p,prop = .1)
+      }
+      SMprectrue<-GRAPH$graph;
+      
+      SMprec<-noisyOmega(SMprectrue,0)
+      prec2sigma=solve(SMprec)
+      interm=eigen(prec2sigma)
+      sqrtmat=interm$vectors%*%diag(sqrt(interm$values))%*%solve(interm$vectors)
+      PrecisionTruth[,,i]<-SMprec
+    }else{
+      SMprectrue<-as.matrix(datobj$Omega[,,i])
+      SMprec<-noisyOmega(SMprectrue,0)
+      prec2sigma=solve(SMprec)
+      interm=eigen(prec2sigma)
+      sqrtmat=interm$vectors%*%diag(sqrt(interm$values))%*%solve(interm$vectors)
+      erase=partcorr(SMprec,-200)
+      SMprec_PC=erase$ParCorrMat
+    }
+    SMdat[,,i]<- matrix(rnorm(T * p), ncol=p) %*%sqrtmat
+
+    
+    for(Kk in 1:3){
+      
+      if(Kk==1){
+        MI[,,i]<-mixedsc_overpower_new(SMprectrue,.06,SCvals[Kk,1],SCvals[Kk,2],.1,Mn[err])
+      }else if(Kk==2){
+        MII[,,i]<-mixedsc_overpower_new(SMprectrue,.06,SCvals[Kk,1],SCvals[Kk,2],.1,Mn[err])
+      }else if(Kk==3){
+        MIII[,,i]<-mixedsc_overpower_new(SMprectrue,.06,SCvals[Kk,1],SCvals[Kk,2],.1,Mn[err])
+      }
+    }#end Kk loop
+  }#end i loop
+  if(meth<4){
+    #writeMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Hinnes Code/data/",Structure,"_p=",p,".mat"),data=SMdat,Strong=Strong,M1=MI,M2=MII,M3=MIII)
+    writeMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/New SC Simulations/",Structure,"_p=",p,"_MissProportion=",(2*Mn[err]),".mat"),data=SMdat,Strong=Strong,M1=MI,M2=MII,M3=MIII,GroundTruth=datobj)
+  }else{
+    #writeMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Hinnes Code/data/",Structure,"_p=",p,".mat"),data=SMdat,Strong=Strong,M1=MI,M2=MII,M3=MIII,GroundTruth=PrecisionTruth)
+    writeMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/New SC Simulations/",Structure,"_p=",p,"_MissProportion=",(2*Mn[err]),".mat"),data=SMdat,Strong=Strong,M1=MI,M2=MII,M3=MIII,GroundTruth=PrecisionTruth)
+  }
+}#end meth loop  
+}#end error loop (Mn)

@@ -1,0 +1,254 @@
+# Function SCFC
+# written by Zae
+# ver. 20170830
+
+##  This version ignores removal of T/2 from the objective function; remove calculation of pQ each iteration!
+#
+# y:       T by p response--p nodes/ROIs with measurements at T timepoints
+# P:       p by p matrix structural connectivity matrix  
+# mus:     vector of mu (Should just be one Mu tuning parameter)
+# nu:      nu--parameter to moderate structural-functional relationship
+#a0,b0:  prior parameters for nu parameter (how to update)--need a0>1 for nu function to be convex    
+# siglam:  variance parameter for shrinkage parameters, alpha
+# descent: "newton" uses the newton direction for optimizing alpha
+# eps:     algorithm stops if relative improvement goes below eps
+
+
+
+
+SCFC_update_diag <- function(y,P,siglam,sigmu,maxits,method="glasso",mu_init=NULL,a0_init=NULL,b0_init=NULL,c0=NULL,cov_init=NULL,alpha_init=NULL,outerits,eps=1e-5)
+{
+  
+  Estimates=NULL
+  T = nrow(y);
+  p = ncol(y);
+  niters=1;
+  err=matrix(rep(NaN,maxits+1),maxits+1,1)
+  err[1]=1;
+  alpha=matrix(rep(0,p^2),ncol=p);
+  endtime=matrix(rep(NaN,maxits+1),maxits+1,1);
+  objfunc=matrix(rep(NaN,maxits+1),maxits+1,1);
+  
+  
+  #Initialize covariance matrix,s, and inverse covariance matrix, OmegaN
+  if(is.null(cov_init)){
+    s=(1/T)*t(y)%*%y;#sample covariance matrix using observed functional data y?
+  }else{
+    s=cov_init
+  }
+  
+  #Initialize mu
+  if(is.null(mu_init)){
+    mu=rep(0,p*(p-1)/2);
+  }else{
+    if(length(mu_init)==(p*(p-1)/2)){
+      mu=mu_init
+    } else{
+      #mu=rep(mu_init,p*(p-1)/2)
+      mu=rnorm(p*(p-1)/2,mean=mu_init,sd=sqrt(sigmu))
+    }
+  }
+  
+  #Initialize Omega
+  hold_omeg=list(); hold_invomg=list();
+  grideta=seq(from=0.01,to=.8,length.out=25)
+  fitBIC=rep(0,length(grideta))
+  
+  for(i in 1:length(grideta)){
+    fitted=glasso(s,rho=grideta[i],penalize.diagonal=TRUE)
+    hold_omeg[[i]]=fitted$wi
+    hold_invomg[[i]]=fitted$w
+    fitBIC[i]=-log(det(fitted$wi))+sum(diag(s%*%fitted$wi))+(log(T)/T)*sum(fitted$wi[upper.tri(fitted$wi)]!=0)
+  }
+  indloc=which(fitBIC==min(fitBIC))
+  OmegaN=as.matrix(hold_omeg[[indloc]])
+  invomg=as.matrix(hold_invomg[[indloc]])
+  
+  #Initialize alpha:
+  #alpha=matrix(rep(grideta[indloc],(dim(P)[1])^2),ncol=dim(P)[1])
+  alpha=log(grideta[indloc])*matrix(1,ncol=dim(P)[1],nrow=dim(P)[1])
+  diag(alpha)=rep(-Inf,p)
+  
+  #Initialize nu
+  #nu=runif(1,min = .1,max = 5)
+  nu=-mean((exp(alpha[upper.tri(alpha)])-mu)/P[upper.tri(P)])
+  
+  
+  #Initialize a0, b0.  Based on first and second moments of gamma distribution and estimated mean/variance
+  #from linear regression
+  if(is.null(a0_init)){
+    a0=(nu)^2/var_fit
+  }else {
+    a0=a0_init}
+  if(is.null(b0_init)){
+    b0=(nu)/var_fit
+  } else {
+    b0=b0_init
+  }
+  if(is.null(c0)){
+    cc=1
+  }else{
+    cc=c0
+  }
+  
+  
+  muN=mu;
+  Psq=P*P;
+  
+  #gam=1/(cc*mean(diag(OmegaN))): remove any reference to gam and modify the objfunc here and at the bottom!
+  objfunc[niters]=-(T/2)*log(det(OmegaN))+(1/2)*sum(diag(OmegaN%*%s))+
+    cc*exp(alpha)[upper.tri(exp(alpha))]%*%abs(OmegaN)[upper.tri(abs(OmegaN))] +
+    (1/(2*siglam))*sum((alpha[upper.tri(alpha)]-muN+nu*P[upper.tri(P)])^2) 
+  -(a0-1)*log(nu)+b0*nu +(1/(2*sigmu))*sum((muN -rep(mu_init,p*(p-1)/2))^2)+cc/2*sum(diag(OmegaN))
+  
+  objfunc[1]=5000
+  repeat {
+    #print(paste0("gam=",gam))
+    starttime=proc.time()[3]
+    niters = niters + 1;
+    ## Update Omega, Alpha, Nu (i.e. Eta) 
+    
+    ######
+    Omegaold=OmegaN;
+    alphaold=alpha;
+    nuold=nu;
+    muold=muN;
+    
+    ################################
+    #Update--nu parameters
+    ################################
+    #need prior a0>1 for eta to have convex function
+    #Psq=P*P;
+    AP=alphaold*P; #use updated alpha
+    a=sum(Psq[upper.tri(Psq)])/(siglam)
+    b=b0+(1/siglam)*(sum(AP[upper.tri(AP)])-muold%*%P[upper.tri(P)]);
+    c=-(a0-1);
+    nu=(-b+sqrt(b^2-4*a*c))/(2*a)
+    
+    ################################
+    #Update--mu parameters
+    ################################  
+    #muN=(2*(sum(alpha[upper.tri(alpha)]+nu*P[upper.tri(P)])+siglam*mu_init) )/(sigmu*p*(p-1)+2*siglam  )
+    muN=( sigmu*(alphaold[upper.tri(alphaold)] + nu*P[upper.tri(P)]) + siglam*rep(mu_init,p*(p-1)/2))/(siglam+sigmu)
+    
+    
+    ##################################
+    #Update--alpha parameters
+    #    Goal:  update the upperdiagonal alpha's, then reform into pxp matrix (for GLasso procedure) 
+    ##################################
+    timealp=proc.time()[3]
+    alphaold=alpha;
+    V=0*matrix(rep(1,p*p),ncol=p);
+    omeg=Omegaold[upper.tri(Omegaold)];#use old Omega
+    alpit=0;
+    int=alphaold[upper.tri(alphaold)];
+    
+    while(alpit<1){# ofupdates to estimate of alpha before proceedig with next Omega estimation
+      #g=cc*siglam*diag(abs(omeg))%*%exp(int) +(int-(muN -  nu*P[upper.tri(P)])) #first derivative
+      #H=diag(1+cc*siglam*exp(int)*abs(omeg)) #Hessian
+      #dir=diag(1/diag(H))%*%g
+      #maxdir=max(abs(dir));
+      
+      #New versions--remove unnecessary diag function calls
+      g=cc*siglam*abs(omeg)*exp(int) +(int-(muN -  nu*P[upper.tri(P)])) #first derivative
+      H=1+cc*siglam*exp(int)*abs(omeg) #Hessian matrix:  diagonal matrix so only retain those values for computation gains
+      dir=(1/H)*g
+      
+      ss=1
+      alp_ele=(int-muN+nu*P[upper.tri(P)])
+      #f= 2*cc/T*sum(exp(int)*abs(omeg))+(1/(T*siglam))*sum(alp_ele^2);
+      #print(paste0("min(omeg)=",min(omeg)))
+      #print(paste0("min(exp(int))=",min(exp(int))))
+      f= 2*cc*siglam*sum(exp(int)*abs(omeg))+sum(alp_ele^2);
+      #print(paste0("f=",f))
+      repeat{
+        #print(ss)
+        nalpha=int-ss*dir;
+        alp_ele_N=(nalpha-muN+nu*P[upper.tri(P)]);
+        #nf= 2*cc/T*sum(exp(nalpha)*abs(omeg))+(1/(T*siglam))*sum((alp_ele_N)^2);
+        nf= 2*cc*siglam*sum(exp(nalpha)*abs(omeg))+sum((alp_ele_N)^2);
+        #print(paste0("nf=",nf))
+        #print(sum(g^2))
+        if(f-nf>.45*ss*sum(g*dir) | sum(g^2)<1e-4 ){  
+          break
+        }else{
+          ss=.5*ss
+          print(ss)
+        }
+        if(ss<.5^20){
+          stop("too many ss iterations")
+        }
+      }
+      alphaold=nalpha
+      int=as.numeric(nalpha)
+      alpit=alpit+1;
+    }#end alpha while loop
+    
+    alpha1 = nalpha
+    V[upper.tri(V)]=alpha1;
+    V=V+t(V);
+    alpha=V
+    diag(alpha)=rep(-Inf,p)
+    #diag(alpha)=rep(log(2*(1/(gam))),p);
+    
+    
+    
+    
+    ##################################
+    #Update--inverse covariance matrix
+    ##################################
+    #s--sample covariance matrix
+    #Omegaold=OmegaN;
+    if(method=="QUIC"){
+      OmegaNew=QUIC(s,rho=(cc/2)*exp(alpha),X.init=Omegaold,W.init=invomg,maxIter=outerits,msg=0)
+      OmegaN=OmegaNew$X#-->the estimated inverse covariance matrix
+      invomg=OmegaNew$W
+    }else if(method=="glasso"){
+      OmegaNew=glasso(s ,rho = (cc/2)*exp(alpha),start ="warm",w.init=invomg,wi.init=Omegaold,penalize.diagonal = FALSE)
+      OmegaN=OmegaNew$wi;
+      invomg=OmegaNew$w;
+    }
+
+    
+
+    objfunc[niters]=-(T/2)*log(det(OmegaN))+.5*sum(diag(OmegaN%*%s))+
+      cc*exp(alpha)[upper.tri(exp(alpha))]%*%abs(OmegaN)[upper.tri(abs(OmegaN))] +
+      (1/(2*siglam))*sum((alpha[upper.tri(alpha)]-muN+nu*P[upper.tri(P)])^2) 
+    -(a0-1)*log(nu)+b0*nu +(1/(2*sigmu))*sum((muN -rep(mu_init,p*(p-1)/2))^2)+cc/2*sum(diag(OmegaN))
+    
+    endtime[niters-1]=proc.time()[3]-starttime;
+    
+    err[niters]=(objfunc[niters-1]-objfunc[niters])/abs(objfunc[niters])
+    if(abs(err[niters])<eps || niters>maxits){
+      
+      if(abs(err[niters])<eps){
+        #message("Convergence Reached")
+        Estimates$Method=method
+        Estimates$iters=niters-1;
+        Estimates$Omega=OmegaN;#precision matrix 
+        Estimates$Shrinkage=exp(alpha);#shrinkage parameters
+        Estimates$Nu=nu; #eta estimate:  average effect of struct on func
+        Estimates$Mu=muN; #mu estimate:  controls overall sparcity
+        Estimates$LogLike=objfunc[niters]; #Log-likelihood
+        Estimates$error=err[!is.na(err)]; #error
+        Estimates$Time=endtime[!is.na(endtime)]
+        Estimates$Flag=0;
+        #print(paste0("# iters= ",niters-1))
+        
+        break
+      }
+      else{
+        message("Maximum Iterations exceeded")
+        Estimates$Flag=1;
+        break
+      }
+      #break
+    }
+    
+    
+  }#ends repeat loop
+  
+  return(Estimates)
+}
+
+

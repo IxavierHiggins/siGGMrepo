@@ -1,0 +1,23 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1529246617819.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "A3387899",
+    "lastKnownWriteTime" : 1529471136,
+    "last_content_update" : 1529471136633,
+    "path" : "~/Desktop/siGGM/R/SCFCpath.R",
+    "project_path" : "R/SCFCpath.R",
+    "properties" : {
+        "cursorPosition" : "2,201",
+        "scrollLine" : "0",
+        "tempName" : "Untitled1"
+    },
+    "relative_order" : 3,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

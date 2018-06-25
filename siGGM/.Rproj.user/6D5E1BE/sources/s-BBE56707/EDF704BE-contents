@@ -1,0 +1,464 @@
+######
+# siGGM, aGlasso, and BFC Estimates for Misspecified SC structures
+#   Commented out everything but Pineda for now...12/20/19...uncomment when done!!!
+#
+########
+
+a_0=30;b_0=5;
+#a_0=4;b_0=2;
+#a_0=6;b_0=2
+#Structure="SmallWorld"
+#Structure="ScaleFree"
+#Structure="ErdosRenyi"
+
+
+p=100
+N=5;
+library(psych)
+library(flux)
+library(QUIC)
+library(glasso)
+library(R.matlab)
+
+if(p==100){
+  lambsP=c(1e-7,1e-4,seq(from=.1,to=1,length.out = 8))
+  lambs=c(seq(1e-4,.75,length.out=24),4);
+}else if(p==200){
+  lambsP=c(1e-6,1e-2,seq(from=.1,to=1,length.out = 8))
+  lambs=c(1e-3,1e-2,seq(.1,1,length.out=23));
+  lambs=seq(.0001,.5,length.out=25);
+  lambs=c(lambs[1:24],1)
+}
+
+
+
+source(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Code and scripts/functions/prec2parcorr.R"))
+source(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/glasso_cvSC.R"))
+source(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/glasso_SC.R"))
+source(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/spaceBIC.R"))
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Application Output/functions/SCFC_MuParm_diag_noeta.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Application Output/functions/SCFC_MuParm_diag.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/SensSpec_single.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/MixedSC_Overpower_new.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/ICCcal.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/noisyOmega.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/Bowman.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/PinedaMethod_realdata.R")
+
+Mn=c(0.04,0.1,0.2,0.4,0.5)
+
+start<-proc.time()[3]
+for(structtype in 1:3){
+  if(structtype==1){
+    Structure="SmallWorld"
+  }else if(structtype==2){
+    Structure="ScaleFree"
+  }else if(structtype==3){
+    Structure="ErdosRenyi"
+  }
+  
+Si1=Si2=Si3=Si4=matrix(NA,N,6)
+colnames(Si1)=colnames(Si2)=colnames(Si3)=colnames(Si4)<-c("Sens","Spec","MCC","AUC","L1","Frob")
+Pi1=Pi2=Pi3=Pi4=matrix(NA,N,6)
+colnames(Pi1)=colnames(Pi2)=colnames(Pi3)=colnames(Pi4)<-c("Sens","Spec","MCC","AUC","L1","Frob")
+Bowman1=Bowman2=Bowman3=Bowman4=matrix(NA,N,6)
+colnames(Bowman1)=colnames(Bowman2)=colnames(Bowman3)=colnames(Bowman4)<-c("Sens","Spec","MCC","AUC","L1","Frob")
+HinneRes1=HinneRes2=HinneRes3=HinneRes4=matrix(NA,N,6)
+
+#lambs=seq(.1,25,length.out=25);
+#lambs=c(1e-5,1e-3,1e-1,seq(.1,1,length.out=22));
+#lambs=c(1e-3,1e-1,seq(.1,1,length.out=23));
+#lambs=c(1e-5,1e-3,1e-1,seq(.1,1,length.out=12));
+
+SNET=PNET=array(0,c(p,p,N,3))
+BowmanResults=siGGM=Pineda=array(0,c(6,5,3))
+HINNE=array(0,c(6,5,3))
+colnames(siGGM)=colnames(BowmanResults)=colnames(HINNE)<-paste0(c(.04,.1,.2,.4,.5),"%")
+rownames(siGGM)=rownames(BowmanResults)=rownames(HINNE)<-c("Sens","Spec","MCC","AUC","L1","Frob")
+
+for(Kap in 1:length(Mn)){
+  Loaded<-readMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/New SC Simulations/",Structure,"_p=",p,"_MissProportion=",Mn[Kap],".mat"))
+  HinneEst=readMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/New SC Simulations/HinneFits/MissSpecFullFits/",Structure,"_p=",p,"_SCmisspecify=",Mn[Kap],".mat"))
+  if(Structure=="SmallWorld"){
+    pathdat="/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/new_settings_fromJoshLukemire/Simulation Data/SmallWorld"; 
+    datobj<-readMat(paste0(pathdat,"/20Omegas_",p,"p.mat"));
+  }else if(Structure=="ScaleFree"){
+    pathdat="/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Code and scripts/data/ScaleFree";
+    datobj<-readMat(paste0(pathdat,"/",p,"p_simdat_1.mat")) #SCALE FREE
+  }else if(Structure=="ErdosRenyi"){
+    datobj<-readMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Code and scripts/data/ErdosRenyi/PrecisionMatrices_p=",p,".mat"))
+  }else if(Structure=="BD"){
+    BDload<-readMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/New SC Simulations/",Structure,"_p=",p,"_MissProportion=",Mn[Kap],".mat"))
+  }
+for(i in 1:N){
+  Temp=readMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/New SC Simulations/HinneFits/MissSpecAUC/",Structure,"_p=",p,"_k=",i,"_SCmisspecify=",Mn[Kap],".mat"))
+  
+  print(paste0("Subject ",i))
+  if(Structure=="BD"){
+    SMprectrue<-as.matrix(BDload$GroundTruth[,,i])
+  }else{
+    SMprectrue<-as.matrix(datobj$Omega[,,i])
+  }
+  #SMprectrue<-as.matrix(datobj$Omega[,,i])
+  SMprec<-noisyOmega(SMprectrue,0)
+  erase=partcorr(SMprec,-200)
+  SMprec_PC=erase$ParCorrMat
+  
+  SMdat<-Loaded$data[,,i]
+  T=dim(SMdat)[1]
+  s=(1/T)*t(SMdat)%*%SMdat
+  #lambs=seq(.001,.5,length.out=25)
+  
+  
+  for(Kk in 1:3){
+    fitBIC=list(); Aeta=list();omega_first=list();
+    repos=1:length(lambs);
+    
+    roc_si1=roc_si2=roc_si3=roc_si4=matrix(0,length(lambs),3)
+    roc_hinne1=roc_hinne2=roc_hinne3=roc_hinne4=matrix(0,20,3)
+    
+    print(paste0("Begin Kk=",Kk))
+    if(Kk==1){
+      #for(k in 1:length(lambs)){
+      #  if(k < 3){
+      #  FC_SCorder<-SCFC_NoT_slim_diag(SMdat,Loaded$M1[,,i],method="QUIC",siglam=10,sigmu=5,maxits=500,mu_init=0,a0_init=a_0,b0_init=b_0,c0=lambs[k],cov_init=NULL,outerits = 5,eps=1e-4);
+      #  }else{
+      #  FC_SCorder<-SCFC_NoT_slim_diag(SMdat,Loaded$M1[,,i],method="QUIC",siglam=10,sigmu=5,maxits=500,mu_init=0,a0_init=a_0,b0_init=b_0,c0=lambs[k],cov_init=NULL,outerits = 1000,eps=1e-4);
+      #  }
+      #  if(FC_SCorder$Flag==0){
+      #    omega_first[[k]]=FC_SCorder$Omega;
+      #    Aeta[[k]]=partcorr(omega_first[[k]],-200)$ParCorrMat;
+      #    roc_si1[k,]=SensSpec_single(SMprec_PC,Aeta[[k]],0)
+      #    fitBIC[[k]]=-log(det(FC_SCorder$Omega))+sum(s*FC_SCorder$Omega)+(log(T)/T)*sum(FC_SCorder$Omega[upper.tri(FC_SCorder$Omega)]!=0)
+      #  }else{
+      #    fitBIC[[k]]=NA
+      #    repos[k]=NA
+      #  }
+      #} #end k loop
+      #fitloc=min(which(min(unlist(fitBIC),na.rm=T)==unlist(fitBIC)))
+      #Si1[i,1:3]=SensSpec_single(SMprec_PC,Aeta[[fitloc]],0)
+      #Si1[i,4]=auc(x=(1-roc_si1[repos[is.na(repos)==FALSE],2]),y=roc_si1[repos[is.na(repos)==FALSE],1]);
+      #Si1[i,6]=norm((omega_first[[fitloc]]-SMprectrue),"F")/norm(SMprectrue,"F")
+      #Si1[i,5]=norm((omega_first[[fitloc]]-SMprectrue),"1")/norm(SMprectrue,"1")
+      #SNET[,,i,Kk]=Aeta[[fitloc]];
+      
+      rocP=matrix(0,10,3)
+      tester<-PinedaMethod_realdata(SMdat,Loaded$M1[,,i],lambsP)
+      for(Li in 1:10){
+        rocP[Li,]=SensSpec_single(SMprec,tester$estimates[[Li]],0)
+      }
+      Pi1[i,1:3]=SensSpec_single(SMprec,tester$optnetwork,0)
+      Pi1[i,4]=auc(x=(1-rocP[,2]),y=rocP[,1])
+      Pi1[i,6]=norm((tester$optnetwork-SMprectrue),"F")/norm(SMprectrue,"F")
+      Pi1[i,5]=norm((tester$optnetwork-SMprectrue),"1")/norm(SMprectrue,"1")
+      PNET[,,i,Kk]=partcorr(tester$optnetwork,-200)$ParCorrMat;
+      
+
+      #for(I in 1:dim(Temp$MI)[3]){
+      #  roc_hinne1[I,]=SensSpec_single(SMprec_PC,Temp$MI[,,I],0)
+      #}
+      #HinneRes1[i,4]=auc(x=1-roc_hinne1[,2],y=roc_hinne1[,1])
+      #HinneRes1[i,1:3]=SensSpec_single(SMprec_PC,HinneEst$MI[,,i],0)
+      #HinneRes1[i,6]<-norm(HinneEst$MI[,,i]-SMprec_PC,"F")/norm(SMprec_PC,type = "F")
+      #HinneRes1[i,5]<-norm(HinneEst$MI[,,i]-SMprec_PC,"1")/norm(SMprec_PC,type = "1")
+    }else if(Kk==2){
+      #for(k in 1:length(lambs)){
+      #  if(k<3){
+      #  FC_SCorder<-SCFC_NoT_slim_diag(SMdat,Loaded$M2[,,i],method="QUIC",siglam=10,sigmu=5,maxits=500,mu_init=0,a0_init=a_0,b0_init=b_0,c0=lambs[k],cov_init=NULL,outerits = 5,eps=1e-4);
+      #  }else{
+      #  FC_SCorder<-SCFC_NoT_slim_diag(SMdat,Loaded$M2[,,i],method="QUIC",siglam=10,sigmu=5,maxits=500,mu_init=0,a0_init=a_0,b0_init=b_0,c0=lambs[k],cov_init=NULL,outerits = 1000,eps=1e-4);  
+      #  } 
+      #  if(FC_SCorder$Flag==0){
+      #    omega_first[[k]]=FC_SCorder$Omega;
+      #    Aeta[[k]]=partcorr(omega_first[[k]],-200)$ParCorrMat;
+      #    roc_si2[k,]=SensSpec_single(SMprec_PC,Aeta[[k]],0)
+      #    fitBIC[[k]]=-log(det(FC_SCorder$Omega))+sum(s*FC_SCorder$Omega)+(log(T)/T)*sum(FC_SCorder$Omega[upper.tri(FC_SCorder$Omega)]!=0)
+      #  }else{
+      #    fitBIC[[k]]=NA
+      #    repos[k]=NA
+      #  }
+      #} #end k loop
+      #fitloc=min(which(min(unlist(fitBIC),na.rm=T)==unlist(fitBIC)))
+      #Si2[i,1:3]=SensSpec_single(SMprec_PC,Aeta[[fitloc]],0)
+      #Si2[i,4]=auc(x=(1-roc_si2[repos[is.na(repos)==FALSE],2]),y=roc_si2[repos[is.na(repos)==FALSE],1]);
+      #Si2[i,6]=norm((omega_first[[fitloc]]-SMprectrue),"F")/norm(SMprectrue,"F")
+      #Si2[i,5]=norm((omega_first[[fitloc]]-SMprectrue),"1")/norm(SMprectrue,"1")
+      #SNET[,,i,Kk]=Aeta[[fitloc]]
+      
+      rocP=matrix(0,10,3)
+      tester<-PinedaMethod_realdata(SMdat,Loaded$M2[,,i],lambsP)
+      for(Li in 1:10){
+        rocP[Li,]=SensSpec_single(SMprec,tester$estimates[[Li]],0)
+      }
+      Pi2[i,1:3]=SensSpec_single(SMprec,tester$optnetwork,0)
+      Pi2[i,4]=auc(x=1-rocP[,2],y=rocP[,1])
+      Pi2[i,6]=norm((tester$optnetwork-SMprectrue),"F")/norm(SMprectrue,"F")
+      Pi2[i,5]=norm((tester$optnetwork-SMprectrue),"1")/norm(SMprectrue,"1")
+      PNET[,,i,Kk]=tester$optnetwork;
+      
+      fitBIC=list(); Aeta=list();omega_first=list();
+
+      
+      for(I in 1:dim(Temp$MII)[3]){
+        roc_hinne2[I,]=SensSpec_single(SMprec_PC,Temp$MII[,,I],0)
+      }
+      HinneRes2[i,4]=auc(x=1-roc_hinne2[,2],y=roc_hinne2[,1])
+      HinneRes2[i,1:3]=SensSpec_single(SMprec_PC,HinneEst$MII[,,i],0)
+      HinneRes2[i,6]<-norm(HinneEst$MII[,,i]-SMprec_PC,"F")/norm(SMprec_PC,type = "F")
+      HinneRes2[i,5]<-norm(HinneEst$MII[,,i]-SMprec_PC,"1")/norm(SMprec_PC,type = "1")
+    }else if(Kk==3){
+      #for(k in 1:length(lambs)){
+      #  if(k<3){
+      #  FC_SCorder<-SCFC_NoT_slim_diag(SMdat,Loaded$M3[,,i],method="QUIC",siglam=10,sigmu=5,maxits=500,mu_init=0,a0_init=a_0,b0_init=b_0,c0=lambs[k],cov_init=NULL,outerits = 5,eps=1e-4);
+      #  }else{
+      #    FC_SCorder<-SCFC_NoT_slim_diag(SMdat,Loaded$M3[,,i],method="QUIC",siglam=10,sigmu=5,maxits=500,mu_init=0,a0_init=a_0,b0_init=b_0,c0=lambs[k],cov_init=NULL,outerits = 1000,eps=1e-4);
+      #  }
+      #  if(FC_SCorder$Flag==0){
+      #    omega_first[[k]]=FC_SCorder$Omega;
+      #    Aeta[[k]]=partcorr(omega_first[[k]],-200)$ParCorrMat;
+      #    roc_si3[k,]=SensSpec_single(SMprec_PC,Aeta[[k]],0)
+      #    fitBIC[[k]]=-log(det(FC_SCorder$Omega))+sum(s*FC_SCorder$Omega)+(log(T)/T)*sum(FC_SCorder$Omega[upper.tri(FC_SCorder$Omega)]!=0)
+      #  }else{
+      #    fitBIC[[k]]=NA
+      #    repos[k]=NA
+      #  }
+      #} #end k loop
+      #fitloc=min(which(min(unlist(fitBIC),na.rm=T)==unlist(fitBIC)))
+      #Si3[i,1:3]=SensSpec_single(SMprec_PC,Aeta[[fitloc]],0)
+      #Si3[i,4]=auc(x=(1-roc_si3[repos[is.na(repos)==FALSE],2]),y=roc_si3[repos[is.na(repos)==FALSE],1]);
+      #Si3[i,6]=norm((omega_first[[fitloc]]-SMprectrue),"F")/norm(SMprectrue,"F")
+      #Si3[i,5]=norm((omega_first[[fitloc]]-SMprectrue),"1")/norm(SMprectrue,"1")
+      #SNET[,,i,Kk]=Aeta[[fitloc]]
+      
+      rocP=matrix(0,10,3)
+      tester<-PinedaMethod_realdata(SMdat,Loaded$M3[,,i],lambsP)
+      for(Li in 1:10){
+        rocP[Li,]=SensSpec_single(SMprec,tester$estimates[[Li]],0)
+      }
+      Pi3[i,1:3]=SensSpec_single(SMprec,tester$optnetwork,0)
+      Pi3[i,4]=auc(x=1-rocP[,2],y=rocP[,1])
+      Pi3[i,6]=norm((tester$optnetwork-SMprectrue),"F")/norm(SMprectrue,"F")
+      Pi3[i,5]=norm((tester$optnetwork-SMprectrue),"1")/norm(SMprectrue,"1")
+      PNET[,,i,Kk]=partcorr(tester$optnetwork,-200)$ParCorrMat
+      
+      fitBIC=list(); Aeta=list();omega_first=list();
+
+      
+      #for(I in 1:dim(Temp$MIII)[3]){
+      #  roc_hinne3[I,]=SensSpec_single(SMprec_PC,Temp$MIII[,,I],0)
+      #}
+      #HinneRes3[i,4]=auc(x=1-roc_hinne3[,2],y=roc_hinne3[,1])
+      #HinneRes3[i,1:3]=SensSpec_single(SMprec_PC,HinneEst$MIII[,,i],0)
+      #HinneRes3[i,6]<-norm(HinneEst$MIII[,,i]-SMprec_PC,"F")/norm(SMprec_PC,type = "F")
+      #HinneRes3[i,5]<-norm(HinneEst$MIII[,,i]-SMprec_PC,"1")/norm(SMprec_PC,type = "1")
+    }else if(Kk==4){  #currently ignore Strong SC 
+      #for(k in 1:length(lambs)){
+      #  FC_SCorder<-SCFC_NoT_slim_diag(SMdat,Loaded$Strong[,,i],method="QUIC",siglam=10,sigmu=5,maxits=500,mu_init=0,a0_init=a_0,b0_init=b_0,c0=lambs[k],cov_init=NULL,outerits = 1000,eps=1e-4);
+      #  if(FC_SCorder$Flag==0){
+      #    omega_first[[k]]=FC_SCorder$Omega;
+      #    Aeta[[k]]=partcorr(omega_first[[k]],-200)$ParCorrMat;
+      #    roc_si[k,]=SensSpec_single(SMprec_PC,Aeta[[k]],0)
+      #    fitBIC[[k]]=-log(det(FC_SCorder$Omega))+sum(s*FC_SCorder$Omega)+(log(T)/T)*sum(FC_SCorder$Omega[upper.tri(FC_SCorder$Omega)]!=0)
+      #  }else{
+      #    fitBIC[[k]]=NA
+      #  }
+      #} #end k loop
+      #fitloc=min(which(min(unlist(fitBIC),na.rm=T)==unlist(fitBIC)))
+      #Si4[i,1:3]=SensSpec_single(SMprec_PC,Aeta[[fitloc]],0)
+      #Si4[i,4]=auc(x=(1-roc_si4[,2]),y=roc_si4[,1]);
+      #Si4[i,6]=norm((omega_first[[fitloc]]-SMprectrue),"F")/norm(SMprectrue,"F")
+      #Si4[i,5]=norm((omega_first[[fitloc]]-SMprectrue),"1")/norm(SMprectrue,"1")
+      
+      #fitBIC=list(); Aeta=list();omega_first=list();
+      #roc_bowman=matrix(NA,25,3)
+      #app=Bowman(SMdat,Loaded$Strong[,,i],c=.01,thresh=seq(0,.57,length.out = 25))$thresholded
+      #for(k in 1:25){
+      #  strucBow=app[[k]]
+      #  roc_bowman[k,]=SensSpec_single(SMprec,strucBow,0)
+      #} #end k loop
+      #fitloc=min(which(max(roc_bowman[,3])==roc_bowman[,3]))
+      
+      #Bowman4[i,1:3]=SensSpec_single(SMprectrue,LL_est =app[[fitloc]],0)
+      #Bowman4[i,4]=auc(x=1-roc_bowman[,2],y=roc_bowman[,1])
+    }
+    
+  }#end Kk 
+}#end i loop
+  
+  netdir=paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/NetworkEstimates/a=",a_0,"_b=",b_0,"/");
+  dir.create(paste0(netdir,"p=",p,"/nets"),recursive = T)
+  dir.create(paste0(netdir,"p=",p,"/PerformanceInfo"),recursive = T)
+  
+  #<<save network estimates>>
+  #writeMat(paste0(netdir,"p=",p,"/nets/",Structure,"_siGGM_partialcorrs_MissProportion=",Mn[Kap],".mat"),nets=SNET)
+  writeMat(paste0(netdir,"p=",p,"/nets/",Structure,"_Pineda_partialcorrs_MissProportion=",Mn[Kap],".mat"),nets=PNET)
+  #<<save performance estimates>>
+  siggmPerfm=pinedaPerfm=hinnePerfm=array(0,c(N,6,3));
+  #siggmPerfm[,,1]=Si1;siggmPerfm[,,2]=Si2;siggmPerfm[,,3]=Si3;
+    #save(siggmPerfm,file=paste0(netdir,"p=",p,"/PerformanceInfo/",Structure,"_siGGM_MissProportion=",Mn[Kap],".RData"))
+  pinedaPerfm[,,1]=Pi1;pinedaPerfm[,,2]=Pi2;pinedaPerfm[,,3]=Pi3;
+    save(pinedaPerfm,file=paste0(netdir,"p=",p,"/PerformanceInfo/",Structure,"_Pineda_MissProportion=",Mn[Kap],".RData"))
+  #hinnePerfm[,,1]=HinneRes1;hinnePerfm[,,2]=HinneRes2;hinnePerfm[,,3]=HinneRes3;
+    #save(hinnePerfm,file=paste0(netdir,"p=",p,"/PerformanceInfo/",Structure,"_Hinne_MissProportion=",Mn[Kap],".RData"))
+  
+
+  #siGGM[,Kap,1]=colMeans(Si1);siGGM[,Kap,2]=colMeans(Si2);siGGM[,Kap,3]=colMeans(Si3);#siGGM[,Kap,4]=colMeans(Si4)
+  Pineda[,Kap,1]=colMeans(Pi1);Pineda[,Kap,2]=colMeans(Pi2);Pineda[,Kap,3]=colMeans(Pi3);#siGGM[,Kap,4]=colMeans(Si4)
+  #BowmanResults[,Kap,1]=colMeans(Bowman1);BowmanResults[,Kap,2]=colMeans(Bowman2);BowmanResults[,Kap,3]=colMeans(Bowman3);#BowmanResults[,Kap,4]=colMeans(Bowman4)
+  #HINNE[,Kap,1]=colMeans(HinneRes1);HINNE[,Kap,2]=colMeans(HinneRes2);HINNE[,Kap,3]=colMeans(HinneRes3);#HINNE[,Kap,4]=colMeans(HinneRes4)
+}#end Kap loop
+
+
+savepath=paste0(netdir,"p=",p,"/AveragePerformance/")
+dir.create(savepath,recursive=T)
+#save(x=siGGM,file=paste0(savepath,"siGGM_",Structure,"_",p,"p.RData"))
+save(x=Pineda,file=paste0(savepath,"Pineda_",Structure,"_",p,"p.RData"))
+#save(x=HINNE,file=paste0(savepath,"Hinne_",Structure,"_",p,"p.RData"))
+}
+proc.time()[3]-start
+
+
+##########
+## Plots
+##########
+a_0=30;b_0=5;
+#a_0=4;b_0=2;
+#a_0=2;b_0=2;
+#a_0=6;b_0=2
+
+N=3
+p=100
+Mn=c(0.04,0.1,0.2,0.4,0.5)
+
+
+for(Kale in 1:3){
+  if(Kale==1){
+    Structure="SmallWorld"
+  }else if(Kale==2){
+    Structure="ScaleFree"
+  }else if(Kale==3){
+    Structure="ErdosRenyi"
+  }
+
+
+
+#savepath="/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/New SC Simulations/Results_Misspecify/"
+savepath=paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/NetworkEstimates/","a=",a_0,"_b=",b_0,"/p=",p,"/plots/")
+#savepath="/Users/ixavierhiggins/Desktop/"
+loadpath=paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/NetworkEstimates/","a=",a_0,"_b=",b_0,"/p=",p,"/AveragePerformance/")
+load(paste0(loadpath,"siGGM_",Structure,"_",p,"p.RData"))
+#load(paste0(savepath,"Bowman_",Structure,"_",p,"p.RData"))
+load(paste0(loadpath,"HINNE_",Structure,"_",p,"p.RData"))
+load(paste0(loadpath,"Pineda_",Structure,"_",p,"p.RData"))
+load(paste0(loadpath,"NgMethod_",Structure,"_",p,"p.RData"))
+methnames<-c("MCC","AUC","L1","Frobenius")
+
+interMI=interMII=interMIII=matrix(0,N,3);
+AUCvals_Hinne=array(0,dim = c(4,length(Mn),3))
+if(Structure=="SmallWorld"){
+  pathdat="/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/new_settings_fromJoshLukemire/Simulation Data/SmallWorld"; 
+  datobj<-readMat(paste0(pathdat,"/20Omegas_",p,"p.mat"));
+}else if(Structure=="ScaleFree"){
+  pathdat="/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Code and scripts/data/ScaleFree";
+  datobj<-readMat(paste0(pathdat,"/",p,"p_simdat_1.mat")) #SCALE FREE
+}else if(Structure=="BD"){
+  BDload<-readMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/New SC Simulations/",Structure,"_p=",p,"_MissProportion=",Mn[Kap],".mat"))
+}else if(Structure=="ErdosRenyi"){
+  datobj<-readMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Code and scripts/data/ErdosRenyi/PrecisionMatrices_p=",p,".mat"))
+}
+
+for(K in 1:length(Mn)){
+  for(Kp in 1:5){
+    EST=readMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/New SC Simulations/HinneFits/MissSpecAUC/",Structure,"_p=",p,"_k=",Kp,"_SCmisspecify=",Mn[K],".mat"))
+    if(Structure=="BD"){
+      SMprec<-BDload$GroundTruth[,,Kp]
+    }else{
+    SMprec<-datobj$Omega[,,Kp]
+    }
+    SMprec_PC<-partcorr(SMprec,-200)$ParCorrMat
+    for(R in 1:N){
+      interMI[R,]= SensSpec_single(SMprec_PC,EST$MI[,,R],0);
+      interMII[R,]=SensSpec_single(SMprec_PC,EST$MII[,,R],0);
+      interMIII[R,]=SensSpec_single(SMprec_PC,EST$MIII[,,R],0);
+    }
+  }
+  AUCvals_Hinne[4,K,1]=auc(x=1-interMI[,2],y=interMI[,1])
+  AUCvals_Hinne[4,K,2]=auc(x=1-interMII[,2],y=interMII[,1])
+  AUCvals_Hinne[4,K,3]=auc(x=1-interMIII[,2],y=interMIII[,1])
+}
+#>>> with MCC
+dir.create(savepath)
+png(paste0(savepath,Structure,"_ComparisonPlots_withMCC.png"),width=3.25,height=3.25,units="in",res=1200,pointsize=3)
+par(mfrow=c(2,3),font=2,mar=c(5,3,3,1)+.5)
+for(i in 2:3){#M1, M2, M3 loop
+  for(j in c(3,4,5)){
+    if(j%in%c(3,6)){
+      plot(x=c(4,10,20,40,50),y=siGGM[j,,i],lwd=2,type="l",col="red",main=paste0(methnames[j-2]),xlab="Mis-specification Pct",font.lab=2,font.main=2,cex.lab=3,cex.main=4,ylim=c(0.1,.8),xaxt="n",ylab="",yaxt="n",pch=16)
+      lines(x=c(4,10,20,40,50),y=Pineda[j,,i],lwd=2,col="forestgreen")
+      lines(x=c(4,10,20,40,50),y=HINNE[j,,i],lwd=2,col="blue")
+      #lines(x=c(4,10,20,40,50),y=Ng[j,,i],lwd=2,col="chocolate4")
+      #lines(x=c(4,10,20,40,50),y=BowmanResults[j,,i],lwd=2,col="red")
+      axis(side=2,las=2,font=2,cex.axis=2.25)
+      axis(side=1,at=c(4,10,20,40,50),labels = c(4,10,20,40,50),font=2,cex.axis=2.25)
+      
+    }else if(j==4){
+      plot(x=c(4,10,20,40,50),y=siGGM[j,,i],lwd=2,type="l",col="red",main=paste0(methnames[j-2]),xlab="Mis-specification Pct",font.lab=2,font.main=2,cex.lab=3,cex.main=4,ylim=c(0.5,1),xaxt="n",ylab="",yaxt="n",pch=16)
+      #lines(x=c(4,10,20,40,50),y=HINNE[j,,i],lwd=2,col="blue"): old AUC values--updated with new grid on SC values
+      lines(x=c(4,10,20,40,50),y=Pineda[j,,i],lwd=2,col="forestgreen")
+      lines(x=c(4,10,20,40,50),y=AUCvals_Hinne[j,,i],lwd=2,col="blue")
+      #lines(x=c(4,10,20,40,50),y=Ng[j,,i],lwd=2,col="chocolate4")
+      axis(side=2,las=2,font=2,cex.axis=2.25)
+      axis(side=1,at=c(4,10,20,40,50),labels = c(4,10,20,40,50),font=2,cex.axis=2.25)
+    }else if(j==5){
+    plot(x=c(4,10,20,40,50),y=siGGM[j,,i],lwd=2,type="l",col="red",main=paste0(methnames[j-2]),xaxt="n",font.lab=2,xlab="Mis-specification Pct",font.main=2,cex.lab=3,cex.main=4,ylim=c(0.25,2.5),ylab="",yaxt="n")
+    lines(x=c(4,10,20,40,50),y=Pineda[j,,i],lwd=2,col="forestgreen")
+    lines(x=c(4,10,20,40,50),y=HINNE[j,,i],lwd=2,col="blue")
+    #lines(x=c(4,10,20,40,50),y=Ng[j,,i],lwd=2,col="chocolate4")
+    #lines(x=c(4,10,20,40,50),y=BowmanResults[j,,i],lwd=2,col="red")
+    axis(side=2,las=2,font=2,cex.axis=2.25)
+    axis(side=1,at=c(4,10,20,40,50),labels = c(4,10,20,40,50),font=2,cex.axis=2.25)
+  }
+  }
+}
+dev.off()
+#>>> without MCC
+png(paste0(savepath,Structure,"_ComparisonPlots_withoutMCC.png"),width=3.25,height=3.25,units="in",res=1200,pointsize=3)
+par(mfrow=c(2,2),mar=c(5,3,3,1)+.5)
+for(i in 2:3){#M1, M2, M3 loop
+  for(j in c(4,5)){
+    if(j%in%c(3,6)){
+      plot(x=c(4,10,20,40,50),y=siGGM[j,,i],lwd=2,type="l",col="red",main=paste0(methnames[j-2]),xlab="Mis-specification Pct",font.lab=2,font.main=2,cex.lab=3,cex.main=4,ylim=c(0,1),xaxt="n",ylab="",yaxt="n",pch=16)
+      lines(x=c(4,10,20,40,50),y=Pineda[j,,i],lwd=2,col="forestgreen")
+      lines(x=c(4,10,20,40,50),y=HINNE[j,,i],lwd=2,col="blue")
+      #lines(x=c(4,10,20,40,50),y=Ng[j,,i],lwd=2,col="chocolate4")
+      #lines(x=c(4,10,20,40,50),y=BowmanResults[j,,i],lwd=2,col="red")
+      axis(side=2,las=2,font=2,cex.axis=2.25)
+      axis(side=1,at=c(4,10,20,40,50),labels = c(4,10,20,40,50),font=2,cex.axis=2.25)
+      
+    }else if(j==4){
+      plot(x=c(4,10,20,40,50),y=siGGM[j,,i],lwd=2,type="l",col="red",main=paste0(methnames[j-2]),xlab="Mis-specification Pct",font.lab=2,font.main=2,cex.lab=3,cex.main=4,ylim=c(0,1),xaxt="n",ylab="",yaxt="n",pch=16)
+      #lines(x=c(4,10,20,40,50),y=HINNE[j,,i],lwd=2,col="blue"): old AUC values--updated with new grid on SC values
+      lines(x=c(4,10,20,40,50),y=Pineda[j,,i],lwd=2,col="forestgreen")
+      lines(x=c(4,10,20,40,50),y=AUCvals_Hinne[j,,i],lwd=2,col="blue")
+      #lines(x=c(4,10,20,40,50),y=Ng[j,,i],lwd=2,col="chocolate4")
+      axis(side=2,las=2,font=2,cex.axis=2.25)
+      axis(side=1,at=c(4,10,20,40,50),labels = c(4,10,20,40,50),font=2,cex.axis=2.25)
+    }else if(j==5){
+      plot(x=c(4,10,20,40,50),y=siGGM[j,,i],lwd=2,type="l",col="red",main=paste0(methnames[j-2]),xaxt="n",font.lab=2,xlab="Mis-specification Pct",font.main=2,cex.lab=3,cex.main=4,ylim=c(0,2),ylab="",yaxt="n")
+      lines(x=c(4,10,20,40,50),y=Pineda[j,,i],lwd=2,col="forestgreen")
+      lines(x=c(4,10,20,40,50),y=HINNE[j,,i],lwd=2,col="blue")
+      #lines(x=c(4,10,20,40,50),y=Ng[j,,i],lwd=2,col="chocolate4")
+      #lines(x=c(4,10,20,40,50),y=BowmanResults[j,,i],lwd=2,col="red")
+      axis(side=2,las=2,font=2,cex.axis=2.25)
+      axis(side=1,at=c(4,10,20,40,50),labels = c(4,10,20,40,50),font=2,cex.axis=2.25)
+    }
+  }
+}
+dev.off()
+
+}#end Kale
+
+##>>>> END <<<<<< ############
+
+
+

@@ -1,0 +1,790 @@
+###############################
+# Performance of all methods (except Hinne) on "ICA-crafted" data simulation
+#   SMALL WORLD NETWORK STRUCTURE IMPOSED ON SOURCE MAP, S,
+#   NOTE-
+#       -
+################################
+
+p=100
+N=5;
+T=200;
+densitylevel=.1
+
+savepath="/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/"
+dir.create(paste0(savepath,"Performance/newdatagen"))
+dir.create(paste0(savepath,"DataGen/newdatagen"))
+dir.create(paste0(savepath,"plots/newdatagen"))
+
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/NeuroImage Reviewer Investigations/ICAbased_DataSim.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/NeuroImage Reviewer Investigations/neurosim_4.18.18.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/NeuroImage Reviewer Investigations/neurosim_4.30.18.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/MixedSC_ICAgen.R")
+source(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Code and scripts/functions/prec2parcorr.R"))
+source(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/glasso_cv.R"))
+source(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/glasso_SC.R"))
+source(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/spaceBIC.R"))
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Application Output/functions/SCFC_MuParm_diag_noeta.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Application Output/functions/SCFC_MuParm_diag.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/SensSpec_single.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/noisyOmega.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/PinedaMethod_realdata.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/NgMethod.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Rfunctions/NgMethod_AUC2.R")
+source("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/Application Output/functions/SCFC_update_diag.R")
+require(space)
+require(matrixcalc)
+require(dplyr)
+require(fields)
+library(psych)
+library(flux)
+library(QUIC)
+library(R.matlab)
+library(corpcor)
+
+
+###!!! Simulate SCinfo according to set up in the big table
+datasave=array(0,c(T,p,N,5))
+scsave=Precisionsave=threshOmegasave=array(0,c(p,p,N,5))
+Si1=Pi1=Ng=Ns1=Gl1=Sp1=matrix(NA,N,8)
+colnames(Si1)=colnames(Pi1)=colnames(Ng)=colnames(Ns1)=colnames(Gl1)=colnames(Sp1)<-c("Sens","Spec","MCC","AUC","L1","Frob","Inverse","KL")
+a_0=30;b_0=5;
+Kap=c(.02,.05,.1,.2,.25)
+FinalOverall=array(0,c(6,8,length(Kap)))
+colnames(FinalOverall)=colnames(Sp1)
+rownames(FinalOverall)<-c("Glasso","Space","eta=0","siGGM","aGlasso1","aGlasso2")
+dimnames(FinalOverall)[[3]] <- paste0("% SC Error=",(200*Kap))
+
+for(KK in 1:length(Kap)){
+  for(i in 1:N){
+    #simulate the data
+    Sim=neurosim_newSW(ROI=p,num = 1,timepts = T)#scale free
+    Omega=Sim$Omega[,,1];
+    #TrueC=Sim$C[,,1]#based on empirical estimate of covariance of mixing matrix, A
+    #Precision=Sim$Omega[,,1] #based on inversion of empirical cov(A)
+    TrueC=Sim$TheoCov
+    Precision=solve(Sim$TheoCov)
+    SMdat=Sim$data[1:T,,1]
+    SMdat=scale(SMdat,scale=F)
+    S=(1/T)*t(SMdat)%*%SMdat
+    eigs=eigen(TrueC)
+    
+    datasave[,,i,KK]=SMdat
+    Precisionsave[,,i,KK]=Precision
+    
+    
+    threshOmega=matrix(0,p,p);
+    #First attempt:
+    #threshOmega[which(abs(Precision)>1e-1)]=Precision[which(abs(Precision)>1e-1)]
+    
+    #Second attempt: threshold smallest upper diagonal entries
+    upperdiagvals=cbind(1:length(Precision[upper.tri(Precision)]),Precision[upper.tri(Precision)]);
+    upperdiagvals=upperdiagvals[order(abs(upperdiagvals[,2]),decreasing = F),]
+    quantile=(1-densitylevel)*nrow(upperdiagvals)
+    upperdiagvals[1:floor(quantile),2]=0
+    upperdiagvals=upperdiagvals[order(upperdiagvals[,1],decreasing = F),]
+    threshOmega[upper.tri(threshOmega)]=upperdiagvals[,2]
+    threshOmega=threshOmega+t(threshOmega)
+    diag(threshOmega)=diag(Precision)
+    #image.plot(threshOmega!=0)
+    
+    #Third attempt:  Randomly threshold Precision matrix to attain desired density...structure poor
+    #ulen=length(Precision[upper.tri(Precision)])
+    #lret=floor(densitylevel*ulen)
+    #locsamp=sample(x = 1:ulen,size = lret,replace = F)
+    #threshOmega=matrix(0,p,p)
+    #threshOmega[upper.tri(threshOmega)][locsamp]=Precision[upper.tri(Precision)][locsamp]
+    #threshOmega=t(threshOmega)+threshOmega
+    #diag(threshOmega)=diag(Precision)
+    #image.plot(threshOmega!=0)
+    
+    #Doesn't matter if threshOmega is not SPD
+    #if(min(eigen(threshOmega)$values)<0){
+    #  print("threshOmega not SPD..adding more to diagonal")
+    #  threshOmega=threshOmega+diag(abs(min(eigen(threshOmega)$values))+.001,p);
+    #  threshOmega=round(threshOmega,3);
+    #  print(is.positive.definite(threshOmega))
+    #}
+    TruePC=partcorr(Precision,-200)$ParCorrMat
+    threshOmegasave[,,i,KK]=threshOmega
+    
+    
+    ## New way--retain upper ~3% of edges and lower ~3% of edges...resembles our initial simulation setting
+    pcthresh<-partcorr(Precision,-200)$ParCorrMat
+    upps=pcthresh[upper.tri(pcthresh)]
+    qval<-quantile(upps,.95)
+    Normal<-mixedsc_ICAgen(threshOmega,qval,.2,.1,.1,Kap[KK])
+    #image.plot(Normal)
+    
+    scsave[,,i,KK]=Normal;
+    print("data done")
+    #fit each model
+    #1. Glasso
+    #Use if p is small# lambs=c(seq(from=.0001,to=1,length.out = 24),max(S[upper.tri(S)]))
+    #Use this if p is large! standardize the data via the pre-whitening step above!
+    if(p==100){
+      lambs=c(.0001,seq(from=.001,to=max(S[upper.tri(S)]),length.out = 10))#p=100#
+    }else if(p==200){
+      lambs=c(.001,seq(from=.01,to=1,length.out = 9),2)#p=200#
+    }
+    OmegaGl=list();Aeta=list();
+    roc_muind_.001=matrix(0,length(lambs),3)
+    myfitloc=glasso_cv(data = SMdat,kfold = 5,method = 0,gridlambs = lambs) #cross-validation selection of tuning parameter
+    for(k in 1:length(lambs)){
+      print(k)
+      A=glasso(S,rho=lambs[k],penalize.diagonal = TRUE)
+      OmegaGl[[k]]=A$wi
+      Aeta[[k]]=partcorr(OmegaGl[[k]],-200)$ParCorrMat
+      roc_muind_.001[k,]=SensSpec_single(threshOmega,A$wi,0)
+    }
+    Gl1[i,1:3]=SensSpec_single(LL_true = threshOmega,LL_est = OmegaGl[[myfitloc]],thresh = 0)
+    Gl1[i,4]=auc(x=(1-roc_muind_.001[,2]),y=roc_muind_.001[,1]);
+    Gl1[i,6]=norm((Aeta[[myfitloc]]-TruePC),"F")/norm(TruePC,"F")
+    #Gl1[i,5]=norm((Aeta[[myfitloc]]-TruePC),"1")/norm(TruePC,"1")
+    Gl1[i,5]=sum(abs(OmegaGl[[myfitloc]]-Precision))/sum(abs(Precision))
+    Gl1[i,7]=norm(eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)%*%OmegaGl[[myfitloc]]%*%eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)-diag(p),"F")
+    Gl1[i,8]=1/(2*log(2))*(log(det(Precision)/det(OmegaGl[[myfitloc]])) +sum(OmegaGl[[myfitloc]]*TrueC)-p)
+    print("glasso done")
+    
+    #2. Space
+    threshOmegaPC=partcorr(threshOmega,-200)$ParCorrMat
+    BICval=c()
+    OmegaSp=list();
+    alpha=.1;
+    l1=1/sqrt(T)*qnorm(1-alpha/(2*p));
+    iter=3;
+    #SpacePC=partcorr(Precision,1e-4);
+    #true.adj=SpacePC$GraphStruct;
+    #true.pc=SpacePC$ParCorrMat;
+    #true.adj=abs(tru.pc)>1e-4
+    #spacelamb=seq(.00001,.05,length.out=25);
+    spacelamb=c(.00005,seq(.0001,.01,length.out=23),.04);
+    hold_space=list();
+    
+    roc_space=matrix(0,length(spacelamb),3)
+    SMdat2_normed=apply(SMdat,2,function(x){x/norm(x,"2")})
+    #SMdat2_normed=scale(SMdat2_normed,center=TRUE,scale=FALSE)
+    BICval=c()
+    for(k in 1:length(spacelamb)){
+      result_space=space.joint(SMdat2_normed, lam1=l1*T*spacelamb[k], lam2=0, weight=0, iter=iter)
+      hold_space[[k]]=result_space$ParCor;
+      fit.adj=abs(result_space$ParCor)
+      roc_space[k,]=SensSpec_single(threshOmegaPC,fit.adj,0)
+      BICval[k]=spaceBIC(SMdat2_normed,result_space$ParCor,result_space$sig.fit)
+    }
+    myfitloc_sp=min(which(min(BICval)==BICval))
+    Sp1[i,1:3]=roc_space[myfitloc,]
+    Sp1[i,4]=auc(x=(1-roc_space[,2]),y=roc_space[,1]);
+    Sp1[i,6]=norm((hold_space[[myfitloc_sp]]-TruePC),"F")/norm(TruePC,"F")
+    #Sp1[i,5]=norm((hold_space[[myfitloc_sp]]-TruePC),"1")/norm(TruePC,"1")
+    #Sp1[i,5]=sum(abs(hold_space[[myfitloc_sp]]-TruePC))/sum(abs(TruePC))
+    pcor2precision<-solve(cor2cov(pcor2cor(hold_space[[myfitloc_sp]],tol = 1e-4),sigma = apply(SMdat,2,sd)))
+    pcor2precision[which(abs(pcor2precision)<1e-10)]=0
+    Sp1[i,5]=sum(abs(pcor2precision-Precision))/sum(abs(Precision))
+    Sp1[i,7]=norm(eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)%*%pcor2precision%*%eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)-diag(p),"F")
+    Sp1[i,8]=1/(2*log(2))*(log(det(Precision)/det(pcor2precision)) +sum(pcor2precision*TrueC)-p)
+    
+    
+    print("space done")
+    #3. siGGM(eta=0)
+    #lambs=c(seq(1e-3,.75,length.out=24),max(S[upper.tri(S)]));
+    ##lambs=seq(from=max(S[upper.tri(S)])/10000,to=max(S[upper.tri(S)]),length.out=25)
+    #omega_first=list();Aeta=list();fitBIC=list();repos=1:length(lambs);
+    #roc_si1=matrix(0,length(lambs),3)
+    #for(k in 1:length(lambs)){
+    #  if(k < 3){
+    #    FC_SCorder<-SCFC_NoT_slim_diag_noeta(SMdat,P = diag(p),method="glasso",siglam=10,sigmu=5,maxits=500,mu_init=0,a0_init=a_0,b0_init=b_0,c0=lambs[k],alpha_init=NULL,cov_init=NULL,outerits = 5,eps=1e-4);
+    #  }else{
+    #    FC_SCorder<-SCFC_NoT_slim_diag_noeta(SMdat,P=diag(p),method="glasso",siglam=10,sigmu=5,maxits=500,mu_init=0,a0_init=a_0,b0_init=b_0,c0=lambs[k],alpha_init=NULL,cov_init=NULL,outerits = 1000,eps=1e-4);
+    #  }
+    #  if(FC_SCorder$Flag==0){
+    #    omega_first[[k]]=FC_SCorder$Omega;
+    #    Aeta[[k]]=partcorr(omega_first[[k]],-200)$ParCorrMat;
+    #    roc_si1[k,]=SensSpec_single(threshOmega,omega_first[[k]],0)
+    #    fitBIC[[k]]=-log(det(FC_SCorder$Omega))+sum(S*FC_SCorder$Omega)+(log(T)/T)*sum(FC_SCorder$Omega[upper.tri(FC_SCorder$Omega)]!=0)
+    #  }else{
+    #    fitBIC[[k]]=NA
+    #    repos[k]=NA
+    #  }
+    #} #end k loop
+    #fitloc=min(which(min(unlist(fitBIC),na.rm=T)==unlist(fitBIC)))
+    #Ns1[i,1:3]=SensSpec_single(threshOmega,omega_first[[fitloc]],0)
+    #Ns1[i,4]=auc(x=(1-roc_si1[repos[is.na(repos)==FALSE],2]),y=roc_si1[repos[is.na(repos)==FALSE],1]);
+    #Ns1[i,6]=norm((Aeta[[fitloc]]-TruePC),"F")/norm(TruePC,"F")
+    #Ns1[i,5]=norm((Aeta[[fitloc]]-TruePC),"1")/norm(TruePC,"1")
+    #Ns1[i,7]=norm(eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)%*%omega_first[[fitloc]]%*%eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)-diag(p),"F")
+    #Ns1[i,8]=1/(2*log(2))*(log(det(threshOmega)/det(omega_first[[fitloc]])) +sum(omega_first[[fitloc]]*TrueC)-p)
+    
+    ##NsNET[,,i,1]=Aeta[[fitloc]];
+    print("no eta done")
+    
+    #4. siGGM
+    #For Small world structure
+    if(p==100){
+      lambs=c(.002,.01,seq(.1,1,length.out = 10),10,20) #p=100#
+    }else if(p==200){
+      lambs=c(.0001,.01,seq(.1,1,length.out = 10),4) #p=200#
+    }
+    omega_first=list();Aeta=list();fitBIC=list();repos=1:length(lambs);
+    roc_si1=matrix(0,length(lambs),3)
+    for(k in 1:length(lambs)){
+      print(k)
+      if(k < 3){
+        FC_SCorder<-SCFC_NoT_slim_diag(SMdat,Normal,method="QUIC",siglam=10,sigmu=5,maxits=500,mu_init=0,a0_init=a_0,b0_init=b_0,c0=lambs[k],cov_init=NULL,outerits = 5,eps=1e-4);
+        #FC_SCorder<-SCFC_update_diag(SMdat,Normal,method="QUIC",siglam=10,sigmu=5,maxits=500,mu_init=0,a0_init=a_0,b0_init=b_0,c0=lambs[k],cov_init=NULL,outerits = 5,eps=1e-4);
+        
+      }else{
+        FC_SCorder<-SCFC_NoT_slim_diag(SMdat,Normal,method="QUIC",siglam=10,sigmu=5,maxits=500,mu_init=0,a0_init=a_0,b0_init=b_0,c0=lambs[k],cov_init=NULL,outerits = 1000,eps=1e-4);
+        #FC_SCorder<-SCFC_update_diag(SMdat,Normal,method="QUIC",siglam=10,sigmu=5,maxits=500,mu_init=0,a0_init=a_0,b0_init=b_0,c0=lambs[k],cov_init=NULL,outerits = 1000,eps=1e-4);
+        
+      }
+      if(FC_SCorder$Flag==0){
+        omega_first[[k]]=FC_SCorder$Omega;
+        Aeta[[k]]=partcorr(omega_first[[k]],-200)$ParCorrMat;
+        roc_si1[k,]=SensSpec_single(threshOmega,omega_first[[k]],0)
+        fitBIC[[k]]=-log(det(FC_SCorder$Omega))+sum(S*FC_SCorder$Omega)+(log(T)/T)*sum(FC_SCorder$Omega[upper.tri(FC_SCorder$Omega)]!=0)
+      }else{
+        fitBIC[[k]]=NA
+        repos[k]=NA
+      }
+    } #end k loop
+    fitloc=min(which(min(unlist(fitBIC),na.rm=T)==unlist(fitBIC)))
+    
+    Si1[i,1:3]=roc_si1[fitloc,]
+    Si1[i,4]=auc(x=(1-roc_si1[repos[is.na(repos)==FALSE],2]),y=roc_si1[repos[is.na(repos)==FALSE],1]);
+    #Si1[i,4]=auc(x=(1-roc_si1[,2]),y=roc_si1[,1]);
+    #Si1[i,4]=auc(x=(1-dupRe[,2]),y=dupRe[,1]);
+    Si1[i,6]=norm((Aeta[[fitloc]]-TruePC),"F")/norm(TruePC,"F")
+    #Si1[i,5]=norm((Aeta[[fitloc]]-TruePC),"1")/norm(TruePC,"1")
+    Si1[i,5]=sum(abs(omega_first[[fitloc]]-Precision))/sum(abs(Precision))
+    Si1[i,7]=norm(eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)%*%omega_first[[fitloc]]%*%eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)-diag(p),"F")
+    Si1[i,8]=1/(2*log(2))*(log(det(Precision)/det(omega_first[[fitloc]])) +sum(omega_first[[fitloc]]*TrueC)-p)
+    
+    print("siGGM done")
+    
+    #5. aGlasso1
+    #lambsP=c(1e-7,1e-4,seq(from=.1,to=1,length.out = 8))
+    lambsP=c(1e-7,1e-4,seq(from=1e-3,to=.1,length.out=8))
+    #lambsP=c(1e-8,1e-7,seq(from=1e-4,to=.03,length.out=8))
+    rocP=matrix(0,10,3)
+    tester<-PinedaMethod_realdata(SMdat,Normal,lambsP)
+    testerPC<-partcorr(tester$optnetwork,-200)$ParCorrMat
+    for(Li in 1:10){
+      rocP[Li,]=SensSpec_single(threshOmega,tester$estimates[[Li]],0)
+    }
+    Pi1[i,1:3]=SensSpec_single(threshOmega,tester$optnetwork,0)
+    Pi1[i,4]=auc(x=(1-rocP[,2]),y=rocP[,1])
+    Pi1[i,6]=norm((testerPC-TruePC),"F")/norm(TruePC,"F")
+    #Pi1[i,5]=norm((testerPC-TruePC),"1")/norm(TruePC,"1")
+    Pi1[i,5]=sum(abs(tester$optnetwork-Precision))/sum(abs(Precision))
+    Pi1[i,7]=norm(eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)%*%tester$optnetwork%*%eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)-diag(p),"F")
+    Pi1[i,8]=1/(2*log(2))*(log(det(Precision)/det(tester$optnetwork)) +sum(tester$optnetwork*TrueC)-p)
+    
+    print("aGlasso1 done")
+    
+    #6. aGlasso2 (Ng method)
+    #lambs=c(.0001,.01,.1,1)
+    #OmegaMed=NgMethod(SMdat,Normal*500000,sub=12000,slb=10)
+    #OmegaMedPC<-partcorr(OmegaMed$Omega,-200)$ParCorrMat
+    #OmegaEst=NgMethod_AUC2(SMdat,Normal*500000,depth=1,siglow = 1,sighigh = 300000,lams = lambs,numgrid = 10)
+    #roc_si=matrix(0,length(OmegaEst$Omegapath),3)
+    #for(k in 1:length(OmegaEst$Omegapath)){
+    #  roc_si[k,]=SensSpec_single(threshOmega,OmegaEst$Omegapath[[k]],0)
+    #}
+    #Ng[i,1:3]=SensSpec_single(threshOmega,OmegaMed$Omega,0)
+    #dupRe1=as.data.frame(roc_si)
+    #dupRe2=distinct(dupRe1)
+    #dupRe=as.matrix(dupRe2)
+    #Ng[i,4]=auc(x=(1-dupRe[,2]),y=dupRe[,1]);
+    #Ng[i,6]=norm((OmegaMedPC-TruePC),"F")/norm(TruePC,"F")
+    #Ng[i,5]=norm((OmegaMedPC-TruePC),"1")/norm(TruePC,"1")
+    #Ng[i,7]=norm(eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)%*%OmegaMed$Omega%*%eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)-diag(p),"F")
+    #Ng[i,8]=1/(2*log(2))*(log(det(threshOmega)/det(OmegaMed$Omega)) +sum(OmegaMed$Omega*TrueC)-p)
+    
+    #print("aGlasso2 done")
+    
+    #7. save the data and SCinfo.  Will have to fit G-Wishart in matlab
+    
+  }
+  
+  #save(datasave,file=paste0(savepath,"DataGen/data_p=",p,"regions.RData"))
+  #save(scsave,file=paste0(savepath,"DataGen/SCinfo_p=",p,"regions.RData"))
+  
+  
+  FinalOverall[1,,KK]=colMeans(Gl1); FinalOverall[2,,KK]=colMeans(Sp1)
+  FinalOverall[3,,KK]=colMeans(Ns1); FinalOverall[4,,KK]=colMeans(Si1)
+  FinalOverall[5,,KK]=colMeans(Pi1); FinalOverall[6,,KK]=colMeans(Ng)
+  
+  #writeMat(paste0(savepath,"DataGen/newdatagen/AllDataGenerated_",p,"regions_",T,"timepoints_SCerror=",Kap[KK],"_densitylevel=",densitylevel,".mat"),data=datasave,Omega=Precisionsave,thresholdedOmega=threshOmegasave,SCinfo=scsave)
+  
+  print(paste0("Kap=",Kap[KK]))
+}  
+
+save(FinalOverall,file=paste0(savepath,"Performance/newdatagen/FittingResults_",p,"regions_",T,"timepoints_variedSCerror_densitylevel=",densitylevel,"_SMALLWORLD.RData"))
+writeMat(paste0(savepath,"DataGen/AllDataGenerated_",p,"regions_",T,"timepoints_SCerror_densitylevel=",densitylevel,"_SMALLWORLD.mat"),data=datasave,Omega=Precisionsave,thresholdedOmega=threshOmegasave,SCinfo=scsave)
+
+
+###>> Hines Method results
+p=100
+if(p==100){
+  N=5;
+}else if(p==200){
+  N=3;
+}
+
+T=200;
+densitylevel=.1
+savepath="/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/"
+load(paste0(savepath,"Performance/newdatagen/FittingResults_",p,"regions_",T,"timepoints_variedSCerror_densitylevel=",densitylevel,"_SMALLWORLD.RData"))
+Hinnes=matrix(NA,5,8)
+rownames(Hinnes)<-Kap
+colnames(Hinnes)<-colnames(FinalOverall)
+intsave=matrix(0,N,8)
+HinEst<-readMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/DataGen/HinnesEstimates/HinnesNetworkEstimates_p=",p,"_densitylevel=",densitylevel,"_SMALLWORLD.mat"))
+loadsaved<-readMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/DataGen/AllDataGenerated_",p,"regions_",T,"timepoints_SCerror_densitylevel=",densitylevel,"_SMALLWORLD.mat"))
+aucsaved<-readMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/DataGen/HinnesEstimates/HinnesNetworkEstimatesAUC_p=",p,"_densitylevel=",densitylevel,"_SMALLWORLD.mat"))
+
+for(KK in 1:5){
+  for(i in 1:N){
+    intsave[i,1:3]=SensSpec_single(LL_est = HinEst$Estimates[,,i,KK],LL_true =loadsaved$thresholdedOmega[,,i,KK] ,0)
+    TruePC=partcorr(loadsaved$Omega[,,i,KK],-200)$ParCorrMat
+    TrueC=solve(loadsaved$Omega[,,i,KK])
+    Precision=loadsaved$Omega[,,i,KK]
+    threshOmega=loadsaved$thresholdedOmega[,,i,KK]
+    roc_hinne=matrix(0,20,3)
+    for(L in 1:20){
+      roc_hinne[L,]=SensSpec_single(LL_est = aucsaved$M1[,,L,i],LL_true =loadsaved$thresholdedOmega[,,i,KK] ,0)
+    }
+    intsave[i,4]=auc(x=(1-roc_hinne[,2]),y=roc_hinne[,1]);
+    intsave[i,6]=norm((partcorr(HinEst$Estimates[,,i,KK],-200)$ParCorrMat-TruePC),"F")/norm(TruePC,"F")
+    #intsave[i,5]=norm((partcorr(HinEst$Estimates[,,i,KK],-200)$ParCorrMat-TruePC),"1")/norm(TruePC,"1")
+    intsave[i,5]=sum(abs(partcorr(HinEst$Estimates[,,i,KK],-200)$ParCorrMat-TruePC))/sum(abs(TruePC))
+    eigs=eigen(TrueC)
+    intsave[i,7]=norm(eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)%*%HinEst$Estimates[,,i,KK]%*%eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)-diag(p),"F")
+    intsave[i,8]=1/(2*log(2))*(log(det(Precision)/det(HinEst$Estimates[,,i,KK])) +sum(HinEst$Estimates[,,i,KK]*TrueC)-p)
+    
+  }
+  Hinnes[KK,]=colMeans(intsave)
+}
+
+
+
+#>>>Plots of information (separate plots)
+library(rmutil)
+library(plotrix) 
+Kap=200*c(.02,.05,.1,.2,.25)
+
+#png(paste0("/Users/ixavierhiggins/Desktop/MetricsComparison_SMALLWORLD.png"),width=6.25,height=3.25,units="in",res=200,pointsize=3)
+par(mfcol=c(2,3),mar=c(4,6,2,2)+.5)
+
+for(i in 1:1){
+    png(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/plots/MetricsComparison_p=",p,"_T=",T,"_densitylevel=",densitylevel,"_SMALLWORLD.png"),width=3.25,height=3.25,units="in",res=200,pointsize=3)
+    par(mfrow=c(2,2),mar=c(4,6,2,2)+.5)
+    
+    #MCC
+    #plot(x=Kap,y=FinalOverall[4,3,1:5],type="o",col="red",xaxt="n",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="MCC",font=2,font.lab=2,cex.main=3,cex.axis=1.75,cex.lab=2.25,ylim=c(-.1,max(c(FinalOverall[1:5,3,],Hinnes[,3]),na.rm=T)))#siGGM: smallworld M2
+    #lines(x=Kap,y=FinalOverall[5,3,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+    #lines(x=Kap,y=rep(mean(FinalOverall[1,3,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+    #lines(x=Kap,y=rep(mean(FinalOverall[2,3,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+    #lines(x=Kap,y=Hinnes[1:5,3],col="blue",type="o",pch=16,lwd=1.5)#Glasso
+    #axis(side=2,cex.axis=1.75,las=2,font=2)
+    #axis(side=1,at = Kap,labels = Kap,cex.axis=1.75,font=2)
+    #Omit#title(ylab = "Correlation", cex.lab = 2.25,line = 4.5,font.lab=2)
+    #savefont<-par(font=2)
+    #legend("bottomleft",legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=1.75)
+    #par(savefont)
+    
+    
+    #AUC
+    plot(x=Kap,y=FinalOverall[4,4,1:5],xaxt="n",type="o",col="red",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="AUC",font=2,font.lab=2,cex.main=3,cex.axis=1.75,cex.lab=2.25,ylim=c(.4,max(c(FinalOverall[1:5,4,],Hinnes[,4]),na.rm=T)))#siGGM: smallworld M2
+    lines(x=Kap,y=FinalOverall[5,4,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+    lines(x=Kap,y=rep(mean(FinalOverall[1,4,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+    lines(x=Kap,y=rep(mean(FinalOverall[2,4,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+    lines(x=Kap,y=Hinnes[1:5,4],col="blue",type="o",pch=16,lwd=1.5)#Glasso
+    axis(side=2,cex.axis=1.75,las=2,font=2)
+    axis(side=1,at = Kap,labels = Kap,cex.axis=1.75,font=2)
+    #title(ylab = "Correlation", cex.lab = 2.25,line = 4.5,font.lab=2)
+    savefont<-par(font=2)
+    legend("bottomleft",ncol=2,legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=1.75)
+    par(savefont)
+    
+    
+    #L1
+    #plot(x=Kap,y=FinalOverall[4,5,1:5],type="o",col="red",xaxt="n",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="L1",font=2,font.lab=2,cex.main=3,cex.axis=1.75,cex.lab=2.25,ylim=c(0.7,max(c(FinalOverall[1:5,5,],Hinnes[,5]),na.rm=T)))#siGGM: smallworld M2
+    #lines(x=Kap,y=FinalOverall[5,5,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+    #lines(x=Kap,y=rep(mean(FinalOverall[1,5,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+    #lines(x=Kap,y=rep(mean(FinalOverall[2,5,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+    #lines(x=Kap,y=Hinnes[1:5,5],col="blue",type="o",pch=16,lwd=1.5)#Glasso
+    #axis(side=2,cex.axis=1.75,las=2,font=2)
+    #axis(side=1,at = Kap,labels = Kap,cex.axis=1.75,font=2)
+    #omit#title(ylab = "Correlation", cex.lab = 2.25,line = 4.5,font.lab=2)
+    #savefont<-par(font=2)
+    #legend("bottomleft",ncol=2,legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=1.75)
+    #par(savefont)
+    
+    #Inverse error
+    plot(x=Kap,y=FinalOverall[4,7,1:5],ylim=c(7.5,10),xaxt="n",type="o",col="red",xaxt="n",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="Inverse Error",font=2,font.lab=2,cex.main=3,cex.axis=1.75,cex.lab=2.25)#siGGM: smallworld M2
+    lines(x=Kap,y=FinalOverall[5,7,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+    lines(x=Kap,y=rep(mean(FinalOverall[1,7,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+    lines(x=Kap,y=rep(mean(FinalOverall[2,7,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+    axis(side=2,cex.axis=1.75,las=2,font=2,at=c(8,8.62,10),labels=c("8","1390","2545"))
+    axis(side=1,at = Kap,labels = Kap,cex.axis=1.75,font=2)
+    axis.break(2,8.45) 
+    par(new=TRUE)
+    #lines(x=Kap,y=Hinnes[1:5,7]/175,col="blue",type="o",pch=16,lwd=1.5)#Glasso
+    plot(x=Kap,y=Hinnes[1:5,7]/215,ylim=c(2,12),col="blue",type="o",pch=16,lwd=1.5,xlab="",ylab="",main="",axes=F)#Hinne
+    savefont<-par(font=2)
+    legend("bottomleft",ncol=2,legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=1.75)
+    par(savefont)
+    
+    #Kullback Liebler divergence 
+    plot(x=Kap,y=FinalOverall[4,8,1:5],ylim=c(65,95),xaxt="n",type="o",col="red",xaxt="n",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="Kullback-Leibler Divergence",font=2,font.lab=2,cex.main=3,cex.axis=1.75,cex.lab=2.25)#siGGM: smallworld M2
+    lines(x=Kap,y=FinalOverall[5,8,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+    lines(x=Kap,y=rep(mean(FinalOverall[1,8,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+    lines(x=Kap,y=rep(mean(FinalOverall[2,8,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+    #box()
+    axis(side=2,cex.axis=1.75,las=2,font=2,at=c(65,70,75,80,85,95),labels=c("65","70","75","80","5390","10000"))
+    axis(side=1,at = Kap,labels = Kap,cex.axis=1.75,font=2)
+    axis.break(2,83,style="slash") 
+    par(new=TRUE)
+    #lines(x=Kap,y=Hinnes[1:5,8]/140,col="blue",type="o",pch=16,lwd=1.5)#Hinne
+    plot(x=Kap,y=Hinnes[1:5,8]/102,ylim=c(-30,95),col="blue",type="o",pch=16,lwd=1.5,xlab="",ylab="",main="",axes=F)#Hinne
+    savefont<-par(font=2)
+    legend("bottomleft",ncol=2,legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=1.75)
+    par(savefont)
+    
+    
+    dev.off()
+}
+
+
+for(i in 1:1){
+  png(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/plots/MetricsComparison_p=",p,"_T=",T,"_densitylevel=",densitylevel,"_SMALLWORLD.png"),width=3.25,height=3.25,units="in",res=200,pointsize=3)
+  par(mfrow=c(2,2),mar=c(4,6,2,2)+.5)
+  
+  #MCC
+  #plot(x=Kap,y=FinalOverall[4,3,1:5],type="o",col="red",xaxt="n",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="MCC",font=2,font.lab=2,cex.main=3,cex.axis=1.75,cex.lab=2.25,ylim=c(-.1,max(c(FinalOverall[1:5,3,],Hinnes[,3]),na.rm=T)))#siGGM: smallworld M2
+  #lines(x=Kap,y=FinalOverall[5,3,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+  #lines(x=Kap,y=rep(mean(FinalOverall[1,3,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+  #lines(x=Kap,y=rep(mean(FinalOverall[2,3,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+  #lines(x=Kap,y=Hinnes[1:5,3],col="blue",type="o",pch=16,lwd=1.5)#Glasso
+  #axis(side=2,cex.axis=1.75,las=2,font=2)
+  #axis(side=1,at = Kap,labels = Kap,cex.axis=1.75,font=2)
+  #Omit#title(ylab = "Correlation", cex.lab = 2.25,line = 4.5,font.lab=2)
+  #savefont<-par(font=2)
+  #legend("bottomleft",legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=1.75)
+  #par(savefont)
+  
+  
+  #AUC
+  plot(x=Kap,y=FinalOverall[4,4,1:5],xaxt="n",type="o",col="red",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="AUC",font=2,font.lab=2,cex.main=3,cex.axis=1.75,cex.lab=2.25,ylim=c(.4,max(c(FinalOverall[1:5,4,],Hinnes[,4]),na.rm=T)))#siGGM: smallworld M2
+  lines(x=Kap,y=FinalOverall[5,4,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+  lines(x=Kap,y=rep(mean(FinalOverall[1,4,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+  lines(x=Kap,y=rep(mean(FinalOverall[2,4,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+  lines(x=Kap,y=Hinnes[1:5,4],col="blue",type="o",pch=16,lwd=1.5)#Glasso
+  axis(side=2,cex.axis=1.75,las=2,font=2)
+  axis(side=1,at = Kap,labels = Kap,cex.axis=1.75,font=2)
+  #title(ylab = "Correlation", cex.lab = 2.25,line = 4.5,font.lab=2)
+  savefont<-par(font=2)
+  legend("bottomleft",ncol=2,legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=1.75)
+  par(savefont)
+  
+  
+  #L1
+  #plot(x=Kap,y=FinalOverall[4,5,1:5],type="o",col="red",xaxt="n",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="L1",font=2,font.lab=2,cex.main=3,cex.axis=1.75,cex.lab=2.25,ylim=c(0.6,max(c(FinalOverall[1:5,5,],Hinnes[,5]),na.rm=T)))#siGGM: smallworld M2
+  #lines(x=Kap,y=FinalOverall[5,5,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+  #lines(x=Kap,y=rep(mean(FinalOverall[1,5,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+  #lines(x=Kap,y=rep(mean(FinalOverall[2,5,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+  #lines(x=Kap,y=Hinnes[1:5,5],col="blue",type="o",pch=16,lwd=1.5)#Glasso
+  #axis(side=2,cex.axis=1.75,las=2,font=2)
+  #axis(side=1,at = Kap,labels = Kap,cex.axis=1.75,font=2)
+  #omit#title(ylab = "Correlation", cex.lab = 2.25,line = 4.5,font.lab=2)
+  #savefont<-par(font=2)
+  #legend("bottomleft",ncol=2,legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=1.75)
+  #par(savefont)
+  
+  #Inverse error
+  plot(x=Kap,y=FinalOverall[4,7,1:5],ylim=c(4,30),xaxt="n",type="o",col="red",xaxt="n",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="Inverse Error",font=2,font.lab=2,cex.main=3,cex.axis=1.75,cex.lab=2.25)#siGGM: smallworld M2
+  lines(x=Kap,y=FinalOverall[5,7,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+  lines(x=Kap,y=rep(mean(FinalOverall[1,7,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+  lines(x=Kap,y=rep(mean(FinalOverall[2,7,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+  #box()
+  axis(side=2,cex.axis=1.75,las=2,font=2,at=c(3.15,9,11,13,15,17,19.0,25.5,29.5),labels=c("0","9","11","13","15","17","583","1500","1825"))
+  axis(side=1,at = Kap,labels = Kap,cex.axis=1.75,font=2)
+  axis.break(2,18) 
+  axis.break(2,4,style = "zigzag")
+  par(new=TRUE)
+  #lines(x=Kap,y=Hinnes[1:5,7]/175,col="blue",type="o",pch=16,lwd=1.5)#Glasso
+  plot(x=Kap,y=Hinnes[1:5,7]/60,ylim=c(-20,30),col="blue",type="o",pch=16,lwd=1.5,xlab="",ylab="",main="",axes=F)#Hinne
+  savefont<-par(font=2)
+  legend("bottomleft",ncol=2,legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=1.75)
+  par(savefont)
+  
+  #Kullback Liebler divergence 
+  plot(x=Kap,y=FinalOverall[4,8,1:5],ylim=c(23,100),xaxt="n",type="o",col="red",xaxt="n",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="Kullback-Leibler Divergence",font=2,font.lab=2,cex.main=3,cex.axis=1.75,cex.lab=2.25)#siGGM: smallworld M2
+  lines(x=Kap,y=FinalOverall[5,8,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+  lines(x=Kap,y=rep(mean(FinalOverall[1,8,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+  lines(x=Kap,y=rep(mean(FinalOverall[2,8,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+  #box()
+  axis(side=2,cex.axis=1.75,las=2,font=2,at=c(40,50,60,70,84,100),labels=c("40","50","60","70","2460","6650"))
+  axis(side=1,at = Kap,labels = Kap,cex.axis=1.75,font=2)
+  axis.break(2,78,style="slash") 
+  par(new=TRUE)
+  #lines(x=Kap,y=Hinnes[1:5,8]/140,col="blue",type="o",pch=16,lwd=1.5)#Hinne
+  plot(x=Kap,y=Hinnes[1:5,8]/67,ylim=c(-200,100),col="blue",type="o",pch=16,lwd=1.5,xlab="",ylab="",main="",axes=F)#Hinne
+  savefont<-par(font=2)
+  legend("bottomleft",ncol=2,legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=1.75)
+  par(savefont)
+  
+  
+  dev.off()
+}
+
+#dev.off()
+
+
+## Joint Plot code
+library(rmutil)
+library(plotrix) 
+Kap=200*c(.02,.05,.1,.2,.25)
+
+png(paste0("/Users/ixavierhiggins/Desktop/MetricsComparison_SMALLWORLD.png"),width=6.25,height=3.25,units="in",res=200,pointsize=3)
+par(mfrow=c(2,3),mar=c(4,6,3,2)+.5)
+
+p=100
+N=5;
+T=200;
+densitylevel=.1
+savepath="/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/"
+load(paste0(savepath,"Performance/newdatagen/FittingResults_",p,"regions_",T,"timepoints_variedSCerror_densitylevel=",densitylevel,"_SMALLWORLD.RData"))
+Hinnes=matrix(NA,5,8)
+rownames(Hinnes)<-Kap
+colnames(Hinnes)<-colnames(FinalOverall)
+intsave=matrix(0,N,8)
+HinEst<-readMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/DataGen/HinnesEstimates/HinnesNetworkEstimates_p=",p,"_densitylevel=",densitylevel,"_SMALLWORLD.mat"))
+loadsaved<-readMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/DataGen/AllDataGenerated_",p,"regions_",T,"timepoints_SCerror_densitylevel=",densitylevel,"_SMALLWORLD.mat"))
+aucsaved<-readMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/DataGen/HinnesEstimates/HinnesNetworkEstimatesAUC_p=",p,"_densitylevel=",densitylevel,"_SMALLWORLD.mat"))
+
+for(KK in 1:5){
+  for(i in 1:N){
+    intsave[i,1:3]=SensSpec_single(LL_est = HinEst$Estimates[,,i,KK],LL_true =loadsaved$thresholdedOmega[,,i,KK] ,0)
+    TruePC=partcorr(loadsaved$Omega[,,i,KK],-200)$ParCorrMat
+    TrueC=solve(loadsaved$Omega[,,i,KK])
+    Precision=loadsaved$Omega[,,i,KK]
+    threshOmega=loadsaved$thresholdedOmega[,,i,KK]
+    roc_hinne=matrix(0,20,3)
+    for(L in 1:20){
+      roc_hinne[L,]=SensSpec_single(LL_est = aucsaved$M1[,,L,i],LL_true =loadsaved$thresholdedOmega[,,i,KK] ,0)
+    }
+    intsave[i,4]=auc(x=(1-roc_hinne[,2]),y=roc_hinne[,1]);
+    intsave[i,6]=norm((partcorr(HinEst$Estimates[,,i,KK],-200)$ParCorrMat-TruePC),"F")/norm(TruePC,"F")
+    #intsave[i,5]=norm((partcorr(HinEst$Estimates[,,i,KK],-200)$ParCorrMat-TruePC),"1")/norm(TruePC,"1")
+    intsave[i,5]=sum(abs(partcorr(HinEst$Estimates[,,i,KK],-200)$ParCorrMat-TruePC))/sum(abs(TruePC))
+    eigs=eigen(TrueC)
+    intsave[i,7]=norm(eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)%*%HinEst$Estimates[,,i,KK]%*%eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)-diag(p),"F")
+    intsave[i,8]=1/(2*log(2))*(log(det(Precision)/det(HinEst$Estimates[,,i,KK])) +sum(HinEst$Estimates[,,i,KK]*TrueC)-p)
+    
+  }
+  Hinnes[KK,]=colMeans(intsave)
+}
+for(i in 1:1){
+  #png(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/plots/MetricsComparison_p=",p,"_T=",T,"_densitylevel=",densitylevel,"_SMALLWORLD.png"),width=3.25,height=3.25,units="in",res=200,pointsize=3)
+  #par(mfrow=c(2,2),mar=c(4,6,2,2)+.5)
+  
+  #MCC
+  #plot(x=Kap,y=FinalOverall[4,3,1:5],type="o",col="red",xaxt="n",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="MCC",font=2,font.lab=2,cex.main=4,cex.axis=1.75,cex.lab=2.25,ylim=c(-.1,max(c(FinalOverall[1:5,3,],Hinnes[,3]),na.rm=T)))#siGGM: smallworld M2
+  #lines(x=Kap,y=FinalOverall[5,3,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+  #lines(x=Kap,y=rep(mean(FinalOverall[1,3,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+  #lines(x=Kap,y=rep(mean(FinalOverall[2,3,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+  #lines(x=Kap,y=Hinnes[1:5,3],col="blue",type="o",pch=16,lwd=1.5)#Glasso
+  #axis(side=2,cex.axis=1.75,las=2,font=2)
+  #axis(side=1,at = Kap,labels = Kap,cex.axis=1.75,font=2)
+  #Omit#title(ylab = "Correlation", cex.lab = 2.25,line = 4.5,font.lab=2)
+  #savefont<-par(font=2)
+  #legend("bottomleft",legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=1.75)
+  #par(savefont)
+  
+  
+  #AUC
+  plot(x=Kap,y=FinalOverall[4,4,1:5],xaxt="n",type="o",col="red",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="AUC",font=2,font.lab=2,cex.main=4,cex.axis=1.75,cex.lab=3,ylim=c(.5,max(c(FinalOverall[1:5,4,],Hinnes[,4]),na.rm=T)))#siGGM: smallworld M2
+  lines(x=Kap,y=FinalOverall[5,4,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+  lines(x=Kap,y=rep(mean(FinalOverall[1,4,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+  lines(x=Kap,y=rep(mean(FinalOverall[2,4,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+  lines(x=Kap,y=Hinnes[1:5,4],col="blue",type="o",pch=16,lwd=1.5)#Glasso
+  axis(side=2,cex.axis=2.75,las=2,font=2)
+  axis(side=1,at = Kap,labels = Kap,cex.axis=2.5,font=2)
+  #title(ylab = "Correlation", cex.lab = 2.25,line = 4.5,font.lab=2)
+  savefont<-par(font=2)
+  #Removed 5/12/18#legend("bottomleft",ncol=2,legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=2.1)
+  par(savefont)
+  
+  
+  #L1
+  #plot(x=Kap,y=FinalOverall[4,5,1:5],type="o",col="red",xaxt="n",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="L1",font=2,font.lab=2,cex.main=4,cex.axis=1.75,cex.lab=2.25,ylim=c(0.7,max(c(FinalOverall[1:5,5,],Hinnes[,5]),na.rm=T)))#siGGM: smallworld M2
+  #lines(x=Kap,y=FinalOverall[5,5,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+  #lines(x=Kap,y=rep(mean(FinalOverall[1,5,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+  #lines(x=Kap,y=rep(mean(FinalOverall[2,5,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+  #lines(x=Kap,y=Hinnes[1:5,5],col="blue",type="o",pch=16,lwd=1.5)#Glasso
+  #axis(side=2,cex.axis=1.75,las=2,font=2)
+  #axis(side=1,at = Kap,labels = Kap,cex.axis=1.75,font=2)
+  #omit#title(ylab = "Correlation", cex.lab = 2.25,line = 4.5,font.lab=2)
+  #savefont<-par(font=2)
+  #legend("bottomleft",ncol=2,legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=1.75)
+  #par(savefont)
+  
+  #Inverse error
+  plot(x=Kap,y=FinalOverall[4,7,1:5],ylim=c(7.5,10),xaxt="n",type="o",col="red",xaxt="n",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="Inverse Error",font=2,font.lab=2,cex.main=4,cex.axis=1.75,cex.lab=3)#siGGM: smallworld M2
+  lines(x=Kap,y=FinalOverall[5,7,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+  lines(x=Kap,y=rep(mean(FinalOverall[1,7,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+  lines(x=Kap,y=rep(mean(FinalOverall[2,7,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+  axis(side=2,cex.axis=2.75,las=2,font=2,at=c(8,8.62,10),labels=c("8","1390","2545"))
+  axis(side=1,at = Kap,labels = Kap,cex.axis=2.5,font=2)
+  axis.break(2,8.45) 
+  par(new=TRUE)
+  #lines(x=Kap,y=Hinnes[1:5,7]/175,col="blue",type="o",pch=16,lwd=1.5)#Glasso
+  plot(x=Kap,y=Hinnes[1:5,7]/215,ylim=c(2,12),col="blue",type="o",pch=16,lwd=1.5,xlab="",ylab="",main="",axes=F)#Hinne
+  savefont<-par(font=2)
+  #Removed 5/12/18#legend("bottomleft",ncol=2,legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=2.1)
+  par(savefont)
+  
+  #Kullback Liebler divergence 
+  plot(x=Kap,y=FinalOverall[4,8,1:5],ylim=c(65,95),xaxt="n",type="o",col="red",xaxt="n",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="Kullback-Leibler Divergence",font=2,font.lab=2,cex.main=4,cex.axis=1.75,cex.lab=3)#siGGM: smallworld M2
+  lines(x=Kap,y=FinalOverall[5,8,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+  lines(x=Kap,y=rep(mean(FinalOverall[1,8,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+  lines(x=Kap,y=rep(mean(FinalOverall[2,8,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+  #box()
+  axis(side=2,cex.axis=2.75,las=2,font=2,at=c(65,70,75,80,85,95),labels=c("65","70","75","80","5390","10000"))
+  axis(side=1,at = Kap,labels = Kap,cex.axis=2.5,font=2)
+  axis.break(2,83,style="slash") 
+  par(new=TRUE)
+  #lines(x=Kap,y=Hinnes[1:5,8]/140,col="blue",type="o",pch=16,lwd=1.5)#Hinne
+  plot(x=Kap,y=Hinnes[1:5,8]/102,ylim=c(-30,95),col="blue",type="o",pch=16,lwd=1.5,xlab="",ylab="",main="",axes=F)#Hinne
+  savefont<-par(font=2)
+  #Removed 5/12/18#legend("bottomleft",ncol=2,legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=2.1)
+  par(savefont)
+  
+  
+  #dev.off()
+}
+
+p=200
+N=3;
+
+
+T=200;
+densitylevel=.1
+savepath="/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/"
+load(paste0(savepath,"Performance/newdatagen/FittingResults_",p,"regions_",T,"timepoints_variedSCerror_densitylevel=",densitylevel,"_SMALLWORLD.RData"))
+Hinnes=matrix(NA,5,8)
+rownames(Hinnes)<-Kap
+colnames(Hinnes)<-colnames(FinalOverall)
+intsave=matrix(0,N,8)
+HinEst<-readMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/DataGen/HinnesEstimates/HinnesNetworkEstimates_p=",p,"_densitylevel=",densitylevel,"_SMALLWORLD.mat"))
+loadsaved<-readMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/DataGen/AllDataGenerated_",p,"regions_",T,"timepoints_SCerror_densitylevel=",densitylevel,"_SMALLWORLD.mat"))
+aucsaved<-readMat(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/DataGen/HinnesEstimates/HinnesNetworkEstimatesAUC_p=",p,"_densitylevel=",densitylevel,"_SMALLWORLD.mat"))
+
+for(KK in 1:5){
+  for(i in 1:N){
+    intsave[i,1:3]=SensSpec_single(LL_est = HinEst$Estimates[,,i,KK],LL_true =loadsaved$thresholdedOmega[,,i,KK] ,0)
+    TruePC=partcorr(loadsaved$Omega[,,i,KK],-200)$ParCorrMat
+    TrueC=solve(loadsaved$Omega[,,i,KK])
+    Precision=loadsaved$Omega[,,i,KK]
+    threshOmega=loadsaved$thresholdedOmega[,,i,KK]
+    roc_hinne=matrix(0,20,3)
+    for(L in 1:20){
+      roc_hinne[L,]=SensSpec_single(LL_est = aucsaved$M1[,,L,i],LL_true =loadsaved$thresholdedOmega[,,i,KK] ,0)
+    }
+    intsave[i,4]=auc(x=(1-roc_hinne[,2]),y=roc_hinne[,1]);
+    intsave[i,6]=norm((partcorr(HinEst$Estimates[,,i,KK],-200)$ParCorrMat-TruePC),"F")/norm(TruePC,"F")
+    #intsave[i,5]=norm((partcorr(HinEst$Estimates[,,i,KK],-200)$ParCorrMat-TruePC),"1")/norm(TruePC,"1")
+    intsave[i,5]=sum(abs(partcorr(HinEst$Estimates[,,i,KK],-200)$ParCorrMat-TruePC))/sum(abs(TruePC))
+    eigs=eigen(TrueC)
+    intsave[i,7]=norm(eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)%*%HinEst$Estimates[,,i,KK]%*%eigs$vectors%*%diag(sqrt(eigs$values))%*%t(eigs$vectors)-diag(p),"F")
+    intsave[i,8]=1/(2*log(2))*(log(det(Precision)/det(HinEst$Estimates[,,i,KK])) +sum(HinEst$Estimates[,,i,KK]*TrueC)-p)
+    
+  }
+  Hinnes[KK,]=colMeans(intsave)
+}
+for(i in 1:1){
+  #png(paste0("/Users/ixavierhiggins/Desktop/EMORY/NeuroImaging/Dissertation/Topic 2/SimulationFiles/ICAdataGen/plots/MetricsComparison_p=",p,"_T=",T,"_densitylevel=",densitylevel,"_SMALLWORLD.png"),width=3.25,height=3.25,units="in",res=200,pointsize=3)
+  #par(mfrow=c(2,2),mar=c(4,6,2,2)+.5)
+  
+  #MCC
+  #plot(x=Kap,y=FinalOverall[4,3,1:5],type="o",col="red",xaxt="n",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="MCC",font=2,font.lab=2,cex.main=4,cex.axis=1.75,cex.lab=2.25,ylim=c(-.1,max(c(FinalOverall[1:5,3,],Hinnes[,3]),na.rm=T)))#siGGM: smallworld M2
+  #lines(x=Kap,y=FinalOverall[5,3,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+  #lines(x=Kap,y=rep(mean(FinalOverall[1,3,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+  #lines(x=Kap,y=rep(mean(FinalOverall[2,3,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+  #lines(x=Kap,y=Hinnes[1:5,3],col="blue",type="o",pch=16,lwd=1.5)#Glasso
+  #axis(side=2,cex.axis=1.75,las=2,font=2)
+  #axis(side=1,at = Kap,labels = Kap,cex.axis=1.75,font=2)
+  #Omit#title(ylab = "Correlation", cex.lab = 2.25,line = 4.5,font.lab=2)
+  #savefont<-par(font=2)
+  #legend("bottomleft",legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=1.75)
+  #par(savefont)
+  
+  
+  #AUC
+  plot(x=Kap,y=FinalOverall[4,4,1:5],xaxt="n",type="o",col="red",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="AUC",font=2,font.lab=2,cex.main=4,cex.axis=1.75,cex.lab=3,ylim=c(.5,max(c(FinalOverall[1:5,4,],Hinnes[,4]),na.rm=T)))#siGGM: smallworld M2
+  lines(x=Kap,y=FinalOverall[5,4,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+  lines(x=Kap,y=rep(mean(FinalOverall[1,4,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+  lines(x=Kap,y=rep(mean(FinalOverall[2,4,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+  lines(x=Kap,y=Hinnes[1:5,4],col="blue",type="o",pch=16,lwd=1.5)#Glasso
+  axis(side=2,cex.axis=2.75,las=2,font=2)
+  axis(side=1,at = Kap,labels = Kap,cex.axis=2.5,font=2)
+  #title(ylab = "Correlation", cex.lab = 2.25,line = 4.5,font.lab=2)
+  savefont<-par(font=2)
+  #Removed 5/12/18#legend("bottomleft",ncol=2,legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=2.1)
+  par(savefont)
+  
+  
+  #L1
+  #plot(x=Kap,y=FinalOverall[4,5,1:5],type="o",col="red",xaxt="n",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="L1",font=2,font.lab=2,cex.main=4,cex.axis=1.75,cex.lab=2.25,ylim=c(0.6,max(c(FinalOverall[1:5,5,],Hinnes[,5]),na.rm=T)))#siGGM: smallworld M2
+  #lines(x=Kap,y=FinalOverall[5,5,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+  #lines(x=Kap,y=rep(mean(FinalOverall[1,5,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+  #lines(x=Kap,y=rep(mean(FinalOverall[2,5,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+  #lines(x=Kap,y=Hinnes[1:5,5],col="blue",type="o",pch=16,lwd=1.5)#Glasso
+  #axis(side=2,cex.axis=1.75,las=2,font=2)
+  #axis(side=1,at = Kap,labels = Kap,cex.axis=1.75,font=2)
+  #omit#title(ylab = "Correlation", cex.lab = 2.25,line = 4.5,font.lab=2)
+  #savefont<-par(font=2)
+  #legend("bottomleft",ncol=2,legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=1.75)
+  #par(savefont)
+  
+  #Inverse error
+  plot(x=Kap,y=FinalOverall[4,7,1:5],ylim=c(4,30),xaxt="n",type="o",col="red",xaxt="n",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="Inverse Error",font=2,font.lab=2,cex.main=4,cex.axis=1.75,cex.lab=3)#siGGM: smallworld M2
+  lines(x=Kap,y=FinalOverall[5,7,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+  lines(x=Kap,y=rep(mean(FinalOverall[1,7,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+  lines(x=Kap,y=rep(mean(FinalOverall[2,7,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+  #box()
+  axis(side=2,cex.axis=2.75,las=2,font=2,at=c(3.15,9,11,13,15,17,19.0,25.5,29.5),labels=c("0","9","11","13","15","17","583","1500","1825"))
+  axis(side=1,at = Kap,labels = Kap,cex.axis=2.5,font=2)
+  axis.break(2,18) 
+  #axis.break(2,4,style = "zigzag")
+  par(new=TRUE)
+  #lines(x=Kap,y=Hinnes[1:5,7]/175,col="blue",type="o",pch=16,lwd=1.5)#Glasso
+  plot(x=Kap,y=Hinnes[1:5,7]/60,ylim=c(-20,30),col="blue",type="o",pch=16,lwd=1.5,xlab="",ylab="",main="",axes=F)#Hinne
+  savefont<-par(font=2)
+  #Removed 5/12/18#legend("bottomleft",ncol=2,legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=2.1)
+  par(savefont)
+  
+  #Kullback Liebler divergence 
+  plot(x=Kap,y=FinalOverall[4,8,1:5],ylim=c(23,100),xaxt="n",type="o",col="red",xaxt="n",pch=15,lwd=1.5,yaxt="n",ylab="",xlab="Mis-specification pct",main="Kullback-Leibler Divergence",font=2,font.lab=2,cex.main=4,cex.axis=1.75,cex.lab=3)#siGGM: smallworld M2
+  lines(x=Kap,y=FinalOverall[5,8,1:5],col="green",type="o",pch=16,lwd=1.5)#aGlasso: 
+  lines(x=Kap,y=rep(mean(FinalOverall[1,8,1:5]),5),col="black",type="o",pch=16,lwd=1.5)#Glasso
+  lines(x=Kap,y=rep(mean(FinalOverall[2,8,1:5]),5),col="orange",type="o",pch=16,lwd=1.5)#Space
+  #box()
+  axis(side=2,cex.axis=2.75,las=2,font=2,at=c(40,50,60,70,84,100),labels=c("40","50","60","70","2460","6650"))
+  axis(side=1,at = Kap,labels = Kap,cex.axis=2.5,font=2)
+  axis.break(2,78,style="slash") 
+  par(new=TRUE)
+  #lines(x=Kap,y=Hinnes[1:5,8]/140,col="blue",type="o",pch=16,lwd=1.5)#Hinne
+  plot(x=Kap,y=Hinnes[1:5,8]/67,ylim=c(-200,100),col="blue",type="o",pch=16,lwd=1.5,xlab="",ylab="",main="",axes=F)#Hinne
+  savefont<-par(font=2)
+  #Removed 5/12/18#legend("bottomleft",ncol=2,legend = c("siGGM","aGlasso","G-Wishart","Glasso","Space"),pch=15,col=c("red","green","blue","black","orange"),bty="n",cex=2.1)
+  par(savefont)
+  
+  
+  #dev.off()
+}
+
+dev.off()
+
