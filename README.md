@@ -30,9 +30,9 @@ The siGGM package incorporates the structural connectivity information into the 
 * [QUIC] (https://CRAN.R-project.org/package=QUIC) - Estimate FC using quadratic approximation.
 * [igraph] (https://CRAN.R-project.org/package=igraph) - Used to simulate data under specified network structures.
 
-## Versioning
+## Version
 
-siGGM is currently in version 0.0.1.
+siGGM is currently in version 0.1.0
 
 ## License
 
