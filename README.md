@@ -36,7 +36,7 @@ siGGM is currently in version 0.1.0
 
 ## License
 
-
+This package is licensed under the MIT License - see the LICENSE file for details
 
 ## References
 
