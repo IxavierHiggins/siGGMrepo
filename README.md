@@ -38,10 +38,15 @@ siGGM is currently in version 0.1.0
 
 This package is licensed under the MIT License - see the LICENSE file for details
 
+## Contact
+
+Please send comments and bug reports to: ihiggin@emory.edu
+
 ## References
 
 Higgins, I. A., Kundu, S., & Guo, Y. (2018). Integrative Bayesian Analysis of Brain Functional Networks Incorporating Anatomical Knowledge. arXiv preprint arXiv:1803.00513.
 
 Friedman, J., Hastie, T., & Tibshirani, R. (2008). Sparse inverse covariance estimation with the graphical lasso. Biostatistics, 9(3), 432-441.
+
 
 Hsieh, C. J., Dhillon, I. S., Ravikumar, P. K., & Sustik, M. A. (2011). Sparse inverse covariance matrix estimation using quadratic approximation. In Advances in neural information processing systems (pp. 2330-2338).
