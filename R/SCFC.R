@@ -112,7 +112,7 @@ SCFC<- function(y,P,siglam=10,sigmu=5,maxits=500,method="glasso",etaInd=1,mu_ini
 
   #Initialize eta
   if(etaInd==1){
-    eta=stats::runif(1,min = .1,max = 5)
+    eta=mean((grideta[indloc]-mu)/P[upper.tri(P)])
   }else if(etaInd==0){
     eta=0
   }
